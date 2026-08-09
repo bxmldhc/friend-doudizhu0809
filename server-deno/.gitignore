@@ -1,0 +1,14 @@
+# Local runtime output
+*.log
+
+# Deno local cache and environment files
+.deno/
+.env
+.env.*
+
+# Editors and OS metadata
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini

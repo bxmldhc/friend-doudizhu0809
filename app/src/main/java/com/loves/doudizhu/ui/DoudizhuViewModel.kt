@@ -332,6 +332,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     private fun normalizeUrl(url: String): String {
         val trimmed = url.trim().trimEnd('/')
+            .replaceFirst(Regex("^https://", RegexOption.IGNORE_CASE), "wss://")
+            .replaceFirst(Regex("^http://", RegexOption.IGNORE_CASE), "ws://")
         return if (trimmed.endsWith("/ws")) trimmed else "$trimmed/ws"
     }
 
