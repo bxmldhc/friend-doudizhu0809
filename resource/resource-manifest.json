@@ -1,0 +1,15 @@
+{
+  "name": "好友斗地主",
+  "direction": "modern-festive",
+  "orientation": "landscape",
+  "source": "svg",
+  "android": {"density": "drawable-nodpi", "fallback": ["drawable-xhdpi", "drawable-xxhdpi", "drawable-xxxhdpi"], "pngStatus": "export-pending-tooling-unavailable"},
+  "groups": {
+    "brand": ["app-icon.svg", "splash-landscape.svg", "avatar-set.svg"],
+    "cards": ["card-back.svg", "card-selected.svg", "card-disabled.svg", "card-heart-a.svg", "card-spade-k.svg", "card-joker-big.svg"],
+    "table": ["table-felt.svg", "landlord-badge.svg", "card-pile.svg", "timer-ring.svg"],
+    "actions": ["action-call.svg", "action-rob.svg", "action-play.svg", "action-pass.svg", "action-trustee.svg"],
+    "system": ["status-online.svg", "status-reconnecting.svg", "dialog-confirm.svg", "empty-history.svg"]
+  },
+  "cardGeneration": "svg/tools/generate-cards.ps1"
+}

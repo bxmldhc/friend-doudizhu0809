@@ -1,0 +1,307 @@
+import { RoomManager } from "./rooms.ts";
+
+class FakeSocket {
+  readyState = 1;
+  messages: Record<string, unknown>[] = [];
+
+  send(raw: string) {
+    this.messages.push(JSON.parse(raw));
+  }
+}
+
+function socket(value: FakeSocket): WebSocket {
+  return value as unknown as WebSocket;
+}
+
+function lastMessage(ws: FakeSocket): Record<string, unknown> {
+  const message = ws.messages.at(-1);
+  if (!message) throw new Error("没有收到服务器消息");
+  return message;
+}
+
+function roomCode(ws: FakeSocket): string {
+  return String(lastMessage(ws).room);
+}
+
+function stateMessages(ws: FakeSocket): Record<string, unknown>[] {
+  return ws.messages.filter((message) => message.type === "STATE");
+}
+
+function latestState(ws: FakeSocket): Record<string, unknown> {
+  const message = stateMessages(ws).at(-1);
+  if (!message) throw new Error("没有收到 STATE 消息");
+  return message;
+}
+
+function latestRoom(ws: FakeSocket): Record<string, unknown> {
+  const message = ws.messages.filter((item) => item.type === "ROOM").at(-1);
+  if (!message) throw new Error("没有收到 ROOM 消息");
+  return message;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+Deno.test("2 个 AI：1 名真人可以开始", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 2);
+
+  const room = lastMessage(host);
+  if (room.aiCount !== 2 || room.requiredHumans !== 1) {
+    throw new Error("房间配置没有保存为 2 个 AI / 1 名真人");
+  }
+
+  manager.start(socket(host));
+  if (lastMessage(host).type !== "STATE") {
+    throw new Error("1 名真人配置应该允许开始");
+  }
+});
+
+Deno.test("1 个 AI：需要 2 名真人，人数不足时拒绝开始", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 1);
+  const code = roomCode(host);
+
+  manager.start(socket(host));
+  const rejected = lastMessage(host);
+  if (rejected.type !== "ERROR" || !String(rejected.message).includes("还需要加入 1 名真人")) {
+    throw new Error("人数不足时没有返回正确错误");
+  }
+
+  manager.join(socket(friend), code, "朋友");
+  manager.start(socket(host));
+  if (lastMessage(host).type !== "STATE") {
+    throw new Error("2 名真人配置应该允许开始");
+  }
+});
+
+Deno.test("0 个 AI：需要 3 名真人，人数不足时拒绝开始", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+
+  manager.join(socket(friend), code, "朋友1");
+  manager.start(socket(host));
+  if (lastMessage(host).type !== "ERROR") {
+    throw new Error("3 名真人配置在 2 人时不应开始");
+  }
+
+  manager.join(socket(anotherFriend), code, "朋友2");
+  manager.start(socket(host));
+  if (lastMessage(host).type !== "STATE") {
+    throw new Error("3 名真人配置应该允许开始");
+  }
+});
+
+Deno.test("AI 配置限制在 0 到 2，且房间不会超过所需真人数", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 99);
+  const code = roomCode(host);
+
+  const joinResult = manager.join(socket(friend), code, "朋友");
+  if (joinResult.ok) {
+    throw new Error("2 个 AI 配置不应再加入第二名真人");
+  }
+});
+
+Deno.test("等待区断线释放为空位，游戏中断线保留座位并由 AI 接管", async () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  const sockets = [host, friend, anotherFriend];
+
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+
+  manager.start(socket(host));
+  const initialStateMessage = latestState(host);
+  const initialState = initialStateMessage.state as Record<string, unknown>;
+  const initialSeats = initialState.seats as Record<string, unknown>[];
+  const activeSeat = initialState.turnIndex as number;
+  const activeName = String(initialSeats[activeSeat].name);
+  const disconnected = sockets[activeSeat];
+  const observer = sockets.find((candidate) => candidate !== disconnected)!;
+
+  manager.disconnect(socket(disconnected));
+
+  const awayStateMessage = latestState(observer);
+  const awayState = awayStateMessage.state as Record<string, unknown>;
+  const awaySeats = awayState.seats as Record<string, unknown>[];
+  const awaySeat = awaySeats[activeSeat];
+  if (awaySeat.name !== activeName || awaySeat.isHuman !== false || awaySeat.isAway !== true) {
+    throw new Error("游戏中断线没有保留昵称/座位或没有标记为暂离");
+  }
+
+  await wait(1100);
+  const aiStateMessage = latestState(observer);
+  const aiState = aiStateMessage.state as Record<string, unknown>;
+  if (aiState.turnIndex === activeSeat) {
+    throw new Error("断线玩家轮次没有交给服务器 AI 接管");
+  }
+
+  const replacement = new FakeSocket();
+  const joinResult = manager.join(socket(replacement), code, "新玩家");
+  if (joinResult.ok || joinResult.message !== "游戏已经开始，不能加入") {
+    throw new Error("进行中的暂离座位不应被普通加入占用");
+  }
+
+  manager.disconnect(socket(friend));
+  manager.disconnect(socket(anotherFriend));
+});
+
+Deno.test("游戏中断线后可凭恢复凭证回到原座位", async () => {
+  const manager = new RoomManager({ aiDelayMs: 20 });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  const token = String(lastMessage(host).resumeToken);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+  manager.start(socket(host));
+
+  manager.disconnect(socket(host));
+  const resumed = new FakeSocket();
+  const result = manager.reconnect(socket(resumed), code, token);
+  if (!result.ok) throw new Error(result.message ?? "恢复失败");
+
+  const room = latestRoom(resumed);
+  if (room.type !== "ROOM" || room.yourSeat !== 0 || room.resumeToken !== token) {
+    throw new Error("恢复后没有回到原座位或恢复凭证不一致");
+  }
+  const state = latestState(resumed).state as Record<string, unknown>;
+  const seats = state.seats as Record<string, unknown>[];
+  if (seats[0].isHuman !== true || seats[0].isAway !== false) {
+    throw new Error("恢复后座位仍处于暂离状态");
+  }
+});
+
+Deno.test("真人操作超时由服务器执行默认动作并刷新截止时间", async () => {
+  const manager = new RoomManager({ actionTimeoutMs: 20, aiDelayMs: 100 });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+  manager.start(socket(host));
+  const initial = latestState(host);
+  const initialState = initial.state as Record<string, unknown>;
+  const initialTurn = initialState.turnIndex;
+  if (typeof initialState.actionDeadlineAt !== "number") {
+    throw new Error("真人回合没有下发服务器操作截止时间");
+  }
+
+  await wait(50);
+  const after = latestState(host).state as Record<string, unknown>;
+  if (after.turnIndex === initialTurn) {
+    throw new Error("超时后当前操作玩家没有变化");
+  }
+  if (after.actionDeadlineAt === initialState.actionDeadlineAt) {
+    throw new Error("超时后没有推进牌局状态");
+  }
+  if (!String(after.message).includes("超时")) {
+    throw new Error("超时动作没有在服务器状态中明确标记");
+  }
+});
+
+Deno.test("等待区房主退出后随机移交，新的房主可以开始游戏", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+
+  manager.disconnect(socket(host));
+
+  const friendRoom = latestRoom(friend);
+  const anotherRoom = latestRoom(anotherFriend);
+  const hostSeats = [friendRoom, anotherRoom]
+    .map((room) => Number(room.hostSeat))
+    .filter((seat, index, all) => all.indexOf(seat) === index);
+  if (hostSeats.length !== 1 || ![1, 2].includes(hostSeats[0])) {
+    throw new Error("房主退出后没有把房主身份移交给仍在线玩家");
+  }
+
+  const replacement = new FakeSocket();
+  const joinResult = manager.join(socket(replacement), code, "新玩家");
+  if (!joinResult.ok) {
+    throw new Error(joinResult.message ?? "房主退出后无法补位");
+  }
+  const newHost = hostSeats[0] === 1 ? friend : anotherFriend;
+  manager.start(socket(newHost));
+  if (lastMessage(newHost).type !== "STATE") {
+    throw new Error("新房主无法请求开始游戏");
+  }
+});
+
+Deno.test("游戏中房主退出不销毁房间，玩家身份和排行榜分数继续保留", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  const hostRoomBefore = latestRoom(host);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+  manager.start(socket(host));
+
+  manager.disconnect(socket(host));
+  const state = latestState(friend).state as Record<string, unknown>;
+  const leaderboard = state.leaderboard as Record<string, unknown>[];
+  const formerHost = leaderboard.find((entry) => entry.name === "房主");
+  if (!formerHost || formerHost.isActive !== true || formerHost.isAway !== true) {
+    throw new Error("游戏中退出的房主没有作为暂离玩家保留在排行榜");
+  }
+  if (latestRoom(friend).hostSeat === 0) {
+    throw new Error("游戏中房主退出后没有移交房主身份");
+  }
+  void hostRoomBefore;
+});
+
+Deno.test("所有真人断线后立即销毁房间和恢复凭证", () => {
+  const manager = new RoomManager();
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  const token = String(latestRoom(host).resumeToken);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+  manager.start(socket(host));
+
+  manager.disconnect(socket(host));
+  manager.disconnect(socket(friend));
+  manager.disconnect(socket(anotherFriend));
+
+  const resumed = new FakeSocket();
+  const reconnectResult = manager.reconnect(socket(resumed), code, token);
+  if (reconnectResult.ok || reconnectResult.message !== "房间不存在") {
+    throw new Error("全员断线后房间仍可恢复，未按规则销毁");
+  }
+
+  const replacement = new FakeSocket();
+  const joinResult = manager.join(socket(replacement), code, "后来玩家");
+  if (joinResult.ok || joinResult.message !== "房间不存在") {
+    throw new Error("全员断线后旧房号仍可加入");
+  }
+});
