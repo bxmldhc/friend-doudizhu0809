@@ -72,6 +72,7 @@ fun GameScreen(
     onCall: (Boolean) -> Unit,
     onPlay: (List<Card>) -> Unit,
     onPass: () -> Unit,
+    onReady: (Boolean) -> Unit,
     onRestart: () -> Unit,
     onRetry: () -> Unit,
     onExit: () -> Unit
@@ -81,6 +82,9 @@ fun GameScreen(
     val isMyTurn = game.phase != Phase.FINISHED && game.turnIndex == state.mySeat
     val canBid = isMyTurn && game.phase == Phase.BIDDING
     val canPlay = isMyTurn && game.phase == Phase.PLAYING
+    val requiredPlayersPresent = state.players
+        .take(state.config.humanCount)
+        .none { it == "等待加入" }
     var selected by remember(game.gameNumber, game.turnIndex, game.phase) { mutableStateOf(emptySet<Card>()) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var showScoreboard by remember { mutableStateOf(false) }
@@ -169,16 +173,28 @@ fun GameScreen(
         if (game.phase == Phase.FINISHED) {
             ResultPanel(
                 game = game,
-                canRestart = state.isHost,
+                mySeat = state.mySeat,
+                isHost = state.isHost,
+                canRestart = state.isHost && requiredPlayersPresent && game.readySeats.all { it },
+                isReady = game.readySeats.getOrNull(state.mySeat) == true,
+                onReady = onReady,
                 onRestart = onRestart,
-                onExit = onExit
+                onExit = { showExitConfirm = true }
             )
         }
         if (showExitConfirm) {
             AlertDialog(
                 onDismissRequest = { showExitConfirm = false },
                 title = { Text("退出牌局？") },
-                text = { Text("退出后当前座位会由服务器 AI 托管。") },
+                text = {
+                    Text(
+                        if (game.phase == Phase.FINISHED) {
+                            "退出后将离开当前房间并释放座位，之后可以重新输入房号加入。"
+                        } else {
+                            "退出后当前座位会由服务器 AI 托管。"
+                        }
+                    )
+                },
                 confirmButton = {
                     Button(
                         onClick = {
@@ -823,7 +839,11 @@ private fun ReconnectingOverlay(onRetry: () -> Unit) {
 @Composable
 private fun ResultPanel(
     game: EngineState,
+    mySeat: Int,
+    isHost: Boolean,
     canRestart: Boolean,
+    isReady: Boolean,
+    onReady: (Boolean) -> Unit,
     onRestart: () -> Unit,
     onExit: () -> Unit
 ) {
@@ -871,18 +891,51 @@ private fun ResultPanel(
                             )
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Text("下一局准备状态", color = Wax, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    game.seats.forEach { seat ->
+                        val ready = game.readySeats.getOrNull(seat.index) == true
+                        Text(
+                            "${seat.name}: ${if (ready) "已准备" else "等待准备"}${if (!seat.isHuman) " · AI默认准备" else ""}",
+                            color = if (ready) Color(0xFF7ED9A3) else Muted,
+                            fontSize = 11.sp
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (canRestart) {
+                        Button(
+                            onClick = { onReady(!isReady) },
+                            modifier = Modifier.weight(1f),
+                            enabled = game.seats.getOrNull(mySeat)?.isHuman == true,
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                        ) {
+                            Text(if (isReady) "取消准备" else "准备")
+                        }
+                        if (isHost) {
                             Button(
                                 onClick = onRestart,
                                 modifier = Modifier.weight(1f),
+                                enabled = canRestart,
                                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
                             ) {
-                                Text("再来一局")
+                                Text(if (canRestart) "开始下一局" else "等待全员")
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier.weight(1f).height(48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    if (isReady) "已准备，等待房主" else "准备后等待房主",
+                                    color = Muted,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
                             }
                         }
-                        OutlinedButton(onClick = onExit, modifier = Modifier.weight(1f)) {
+                    }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = onExit, modifier = Modifier.fillMaxWidth()) {
                             Text("返回首页")
                         }
                     }

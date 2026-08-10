@@ -22,7 +22,7 @@ sealed interface NetMessage {
         val requiredHumans: Int
     ) : NetMessage
     data class State(val state: EngineState) : NetMessage
-    data class Error(val message: String) : NetMessage
+    data class Error(val message: String, val code: String? = null) : NetMessage
     data object Pong : NetMessage
 }
 
@@ -56,6 +56,15 @@ object GameProtocol {
     fun encodeStart(): String = """{"type":"START"}"""
 
     fun encodeRestart(): String = """{"type":"RESTART"}"""
+
+    fun encodeReady(ready: Boolean): String {
+        val obj = JSONObject()
+        obj.put("type", "READY")
+        obj.put("ready", ready)
+        return obj.toString()
+    }
+
+    fun encodeLeave(): String = """{"type":"LEAVE"}"""
 
     fun encodeAction(seat: Int, action: RemoteAction): String {
         val actionObj = JSONObject()
@@ -94,7 +103,10 @@ object GameProtocol {
             "STATE" -> NetMessage.State(
                 GameCodec.decodeState(obj.getJSONObject("state").toString())
             )
-            "ERROR" -> NetMessage.Error(obj.optString("message", "未知错误"))
+            "ERROR" -> NetMessage.Error(
+                message = obj.optString("message", "未知错误"),
+                code = obj.optString("code").ifBlank { null }
+            )
             "PONG" -> NetMessage.Pong
             else -> throw IllegalArgumentException("无法识别的服务器消息")
         }

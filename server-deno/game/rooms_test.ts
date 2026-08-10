@@ -7,6 +7,10 @@ class FakeSocket {
   send(raw: string) {
     this.messages.push(JSON.parse(raw));
   }
+
+  close() {
+    this.readyState = 3;
+  }
 }
 
 function socket(value: FakeSocket): WebSocket {
@@ -43,8 +47,29 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function finishCurrentGame(manager: RoomManager, code: string) {
+  const internal = manager as unknown as {
+    rooms: Map<string, {
+      engine: {
+        state: Record<string, unknown>;
+      } | null;
+    }>;
+    afterEngineChange: (room: unknown) => void;
+  };
+  const room = internal.rooms.get(code);
+  if (!room?.engine) throw new Error("测试房间尚未开始");
+  room.engine.state = {
+    ...room.engine.state,
+    phase: "FINISHED",
+    winnerIndex: 0,
+    scoreDelta: [2, -1, -1],
+    message: "测试牌局结束",
+  };
+  internal.afterEngineChange(room);
+}
+
 Deno.test("2 个 AI：1 名真人可以开始", () => {
-  const manager = new RoomManager();
+  const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
   manager.create(socket(host), "房主", "MEDIUM", 2);
 
@@ -60,7 +85,7 @@ Deno.test("2 个 AI：1 名真人可以开始", () => {
 });
 
 Deno.test("1 个 AI：需要 2 名真人，人数不足时拒绝开始", () => {
-  const manager = new RoomManager();
+  const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
   const friend = new FakeSocket();
   manager.create(socket(host), "房主", "MEDIUM", 1);
@@ -80,7 +105,7 @@ Deno.test("1 个 AI：需要 2 名真人，人数不足时拒绝开始", () => {
 });
 
 Deno.test("0 个 AI：需要 3 名真人，人数不足时拒绝开始", () => {
-  const manager = new RoomManager();
+  const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
   const friend = new FakeSocket();
   const anotherFriend = new FakeSocket();
@@ -303,5 +328,94 @@ Deno.test("所有真人断线后立即销毁房间和恢复凭证", () => {
   const joinResult = manager.join(socket(replacement), code, "后来玩家");
   if (joinResult.ok || joinResult.message !== "房间不存在") {
     throw new Error("全员断线后旧房号仍可加入");
+  }
+});
+
+Deno.test("结算后所有真人必须准备，AI 默认准备，房主才能开始下一局", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 1);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "朋友");
+  manager.start(socket(host));
+  finishCurrentGame(manager, code);
+
+  const finished = latestState(host).state as Record<string, unknown>;
+  const initialReady = finished.readySeats as boolean[];
+  if (initialReady[0] || initialReady[1] || !initialReady[2]) {
+    throw new Error("结算后的真人/AI 默认准备状态不正确");
+  }
+
+  manager.restart(socket(host));
+  const rejected = lastMessage(host);
+  if (rejected.type !== "ERROR" || !String(rejected.message).includes("所有玩家准备")) {
+    throw new Error("真人未全部准备时房主仍能开始下一局");
+  }
+
+  manager.setReady(socket(host), true);
+  manager.setReady(socket(friend), true);
+  const allReady = latestState(host).state as Record<string, unknown>;
+  if (!(allReady.readySeats as boolean[]).every(Boolean)) {
+    throw new Error("真人准备状态没有同步给房间");
+  }
+
+  manager.restart(socket(host));
+  const restarted = latestState(host).state as Record<string, unknown>;
+  if (restarted.phase !== "BIDDING" || restarted.gameNumber !== 2) {
+    throw new Error("全员准备后房主未能开始下一局");
+  }
+});
+
+Deno.test("非房主不能开始下一局，进行中也不能提前准备", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 0);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "朋友1");
+  manager.join(socket(anotherFriend), code, "朋友2");
+  manager.start(socket(host));
+
+  manager.setReady(socket(friend), true);
+  const earlyReady = lastMessage(friend);
+  if (earlyReady.type !== "ERROR" || !String(earlyReady.message).includes("本局结束后")) {
+    throw new Error("进行中准备没有被服务器拒绝");
+  }
+
+  finishCurrentGame(manager, code);
+  manager.setReady(socket(host), true);
+  manager.setReady(socket(friend), true);
+  manager.setReady(socket(anotherFriend), true);
+  manager.restart(socket(friend));
+  const rejected = lastMessage(friend);
+  if (rejected.type !== "ERROR" || !String(rejected.message).includes("只有房主")) {
+    throw new Error("非房主可以开始下一局");
+  }
+});
+
+Deno.test("结算后离开会释放旧凭证，原玩家可作为普通玩家重新加入", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 1);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "朋友");
+  const oldToken = String(latestRoom(friend).resumeToken);
+  manager.start(socket(host));
+  finishCurrentGame(manager, code);
+
+  manager.leave(socket(friend));
+  const staleReconnect = new FakeSocket();
+  const reconnectResult = manager.reconnect(socket(staleReconnect), code, oldToken);
+  if (reconnectResult.ok || !String(reconnectResult.message).includes("恢复凭证无效")) {
+    throw new Error("结算后离开仍可使用旧凭证认领座位");
+  }
+
+  const rejoined = new FakeSocket();
+  const joinResult = manager.join(socket(rejoined), code, "朋友");
+  if (!joinResult.ok || latestRoom(rejoined).yourSeat !== 1) {
+    throw new Error(joinResult.message ?? "结算后无法作为普通玩家重新加入");
   }
 });

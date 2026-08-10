@@ -73,6 +73,9 @@ object GameCodec {
                 })
             }
         })
+        obj.put("readySeats", JSONArray().apply {
+            state.readySeats.forEach { put(it) }
+        })
         return obj.toString()
     }
 
@@ -124,6 +127,12 @@ object GameCodec {
         } else {
             emptyList()
         }
+        val readySeats = if (obj.has("readySeats")) {
+            val arr = obj.getJSONArray("readySeats")
+            List(3) { index -> index < arr.length() && arr.optBoolean(index, false) }
+        } else {
+            List(3) { true }
+        }
         return EngineState(
             phase = Phase.valueOf(obj.getString("phase")),
             seats = seats,
@@ -163,7 +172,8 @@ object GameCodec {
                 null
             },
             leaderboard = leaderboard,
-            roundHistory = roundHistory
+            roundHistory = roundHistory,
+            readySeats = readySeats
         )
     }
 

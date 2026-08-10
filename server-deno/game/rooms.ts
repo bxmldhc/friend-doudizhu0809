@@ -19,6 +19,7 @@ interface Room {
   participants: Map<string, RoomParticipant>;
   roundHistory: RoomRoundSummary[];
   lastRecordedGameNumber: number;
+  readySeats: boolean[];
   engine: DoudizhuEngine | null;
   difficulty: Difficulty;
   aiCount: number;
@@ -53,7 +54,11 @@ export class RoomManager {
   private socketRoom = new WeakMap<WebSocket, string>();
 
   constructor(
-    private options: { actionTimeoutMs?: number; aiDelayMs?: number } = {},
+    private options: {
+      actionTimeoutMs?: number;
+      aiDelayMs?: number;
+      persistStats?: boolean;
+    } = {},
   ) {}
 
   create(ws: WebSocket, name: string, difficulty: Difficulty, requestedAiCount: number): string {
@@ -85,6 +90,7 @@ export class RoomManager {
       participants,
       roundHistory: [],
       lastRecordedGameNumber: 0,
+      readySeats: [0, 1, 2].map((seat) => seat >= requiredHumans),
       engine: null,
       difficulty,
       aiCount,
@@ -118,9 +124,14 @@ export class RoomManager {
     room.resumeTokens[seat] = crypto.randomUUID();
     room.playerIds[seat] = participant.id;
     room.names[seat] = name;
+    room.readySeats[seat] = false;
     this.socketRoom.set(ws, code);
     this.sendRoom(room, seat, ws);
     this.broadcastPlayers(room);
+    if (room.engine) {
+      this.syncSeatIdentity(room);
+      this.publishState(room);
+    }
     return { ok: true };
   }
 
@@ -141,6 +152,9 @@ export class RoomManager {
     }
     room.sockets[seat] = ws;
     this.socketRoom.set(ws, code);
+    if (room.engine?.state.phase === "FINISHED") {
+      room.readySeats[seat] = false;
+    }
     if (room.engine) {
       room.engine.setSeatHuman(seat, true);
       room.engine.setSeatAway(seat, false);
@@ -184,10 +198,37 @@ export class RoomManager {
       send(ws, { type: "ERROR", message: "只有房主可以重开" });
       return;
     }
+    if (room.engine.state.phase !== "FINISHED") {
+      send(ws, { type: "ERROR", message: "当前牌局尚未结束" });
+      return;
+    }
     if (!this.validateStartPlayers(room, ws)) return;
+    if (!room.readySeats.every((ready, seat) => {
+      const participant = room.playerIds[seat]
+        ? room.participants.get(room.playerIds[seat]!)
+        : null;
+      return !participant || participant.isAi || room.sockets[seat] === null || ready;
+    })) {
+      send(ws, { type: "ERROR", message: "请等待所有玩家准备" });
+      return;
+    }
     room.engine.startNewGame();
+    this.resetReadySeats(room);
     this.syncSeatIdentity(room);
     this.publishState(room);
+  }
+
+  setReady(ws: WebSocket, ready: boolean) {
+    const room = this.getRoomBySocket(ws);
+    if (!room || !room.engine) return;
+    if (room.engine.state.phase !== "FINISHED") {
+      send(ws, { type: "ERROR", message: "只有本局结束后才能准备" });
+      return;
+    }
+    const seat = room.sockets.findIndex((socket) => socket === ws);
+    if (seat < 0 || !room.playerIds[seat]) return;
+    room.readySeats[seat] = ready;
+    this.broadcastState(room);
   }
 
   action(ws: WebSocket, seat: number, action: RemoteAction) {
@@ -217,6 +258,7 @@ export class RoomManager {
         room.names[seat] = "等待加入";
         room.resumeTokens[seat] = null;
         room.playerIds[seat] = null;
+        room.readySeats[seat] = true;
       }
       this.socketRoom.delete(ws);
       if (room.sockets.every((socket) => socket === null)) {
@@ -228,6 +270,10 @@ export class RoomManager {
       }
       if (room.engine) this.publishState(room);
     }
+  }
+
+  leave(ws: WebSocket) {
+    this.disconnect(ws);
   }
 
   handleMessage(ws: WebSocket, raw: string) {
@@ -262,6 +308,12 @@ export class RoomManager {
         break;
       case "RESTART":
         this.restart(ws);
+        break;
+      case "READY":
+        this.setReady(ws, Boolean(msg.ready));
+        break;
+      case "LEAVE":
+        this.leave(ws);
         break;
       case "ACTION":
         this.action(ws, Number(msg.seat), msg.action as RemoteAction);
@@ -309,6 +361,7 @@ export class RoomManager {
             {
               leaderboard: this.buildLeaderboard(room),
               roundHistory: room.roundHistory,
+              readySeats: room.readySeats,
             },
           ),
         });
@@ -534,17 +587,30 @@ export class RoomManager {
       multiplier: state.multiplier,
       scores,
     });
+    this.resetReadySeats(room);
 
-    recordGame(
-      state.seats.map((seat) => seat.name),
-      state.winnerIndex ?? 0,
-      state.landlordIndex ?? 0,
-      state.scoreDelta,
-    );
+    if (this.options.persistStats !== false) {
+      void recordGame(
+        state.seats.map((seat) => seat.name),
+        state.winnerIndex ?? 0,
+        state.landlordIndex ?? 0,
+        state.scoreDelta,
+      );
+    }
   }
 
   private destroyRoom(room: Room) {
     this.cancelTurnTimer(room);
     this.rooms.delete(room.code);
+  }
+
+  private resetReadySeats(room: Room) {
+    room.readySeats = [0, 1, 2].map((seat) => {
+      const participant = room.playerIds[seat]
+        ? room.participants.get(room.playerIds[seat]!)
+        : null;
+      if (!participant || participant.isAi || room.sockets[seat] === null) return true;
+      return false;
+    });
   }
 }

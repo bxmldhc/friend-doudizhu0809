@@ -74,6 +74,7 @@ fun DoudizhuApp(
                     onCall = viewModel::call,
                     onPlay = viewModel::play,
                     onPass = viewModel::pass,
+                    onReady = viewModel::setReady,
                     onRestart = viewModel::restart,
                     onRetry = viewModel::retryConnection,
                     onExit = viewModel::exitToHome

@@ -115,6 +115,14 @@ class OnlineClient(
         webSocket?.send(GameProtocol.encodeRestart())
     }
 
+    fun setReady(ready: Boolean) {
+        webSocket?.send(GameProtocol.encodeReady(ready))
+    }
+
+    fun leaveRoom() {
+        webSocket?.send(GameProtocol.encodeLeave())
+    }
+
     fun sendAction(seat: Int, action: RemoteAction) {
         webSocket?.send(GameProtocol.encodeAction(seat, action))
     }

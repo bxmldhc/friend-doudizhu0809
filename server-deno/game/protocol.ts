@@ -13,6 +13,8 @@ export type ClientMessage =
   | { type: "RECONNECT"; room: string; token: string }
   | { type: "START" }
   | { type: "RESTART" }
+  | { type: "READY"; ready: boolean }
+  | { type: "LEAVE" }
   | { type: "ACTION"; seat: number; action: RemoteAction }
   | { type: "PING" };
 
@@ -45,6 +47,7 @@ export interface RoomRoundSummary {
 export interface RoomStateContext {
   leaderboard: RoomLeaderboardEntry[];
   roundHistory: RoomRoundSummary[];
+  readySeats: boolean[];
 }
 
 export function parseClientMessage(raw: string): ClientMessage {
@@ -94,6 +97,7 @@ export function serializeState(
     actionDeadlineAt,
     leaderboard: roomContext?.leaderboard ?? [],
     roundHistory: roomContext?.roundHistory ?? [],
+    readySeats: roomContext?.readySeats ?? [true, true, true],
   };
 }
 

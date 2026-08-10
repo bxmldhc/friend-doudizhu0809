@@ -128,13 +128,12 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             _toast.value = "请输入六位数字房号"
             return
         }
-        val normalizedUrl = normalizeUrl(serverUrl)
         connect(
             nickname = nickname,
             serverUrl = serverUrl,
             host = false,
             room = normalizedRoom,
-            resumeCredential = loadResumeToken(normalizedRoom, normalizedUrl)
+            resumeCredential = null
         )
     }
 
@@ -144,6 +143,10 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     fun restart() {
         if (isHost) onlineClient?.restartGame()
+    }
+
+    fun setReady(ready: Boolean) {
+        onlineClient?.setReady(ready)
     }
 
     fun retryConnection() {
@@ -162,8 +165,17 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun exitToHome() {
+        val oldRoom = roomCode
+        val oldUrl = lastServerUrl
+        onlineClient?.leaveRoom()
         onlineClient?.close()
         onlineClient = null
+        if (oldRoom.isNotBlank()) {
+            preferences.edit().remove(resumeKey(oldRoom, oldUrl)).apply()
+        }
+        resumeToken = null
+        roomCode = ""
+        lastRequestedRoom = null
         connection = AppConnectionState.OFFLINE
         _uiState.value = GameUiState.Home(lastNickname, lastServerUrl, connection)
     }

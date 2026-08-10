@@ -71,7 +71,8 @@ data class EngineState(
     val gameNumber: Int = 0,
     val actionDeadlineAt: Long? = null,
     val leaderboard: List<RoomLeaderboardEntry> = emptyList(),
-    val roundHistory: List<RoomRoundSummary> = emptyList()
+    val roundHistory: List<RoomRoundSummary> = emptyList(),
+    val readySeats: List<Boolean> = List(3) { true }
 ) {
     val currentSeat: SeatState
         get() = seats[turnIndex]
