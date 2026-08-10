@@ -85,6 +85,7 @@ fun GameScreen(
     val requiredPlayersPresent = state.players
         .take(state.config.humanCount)
         .none { it == "等待加入" }
+        && game.seats.take(state.config.humanCount).none { it.isAway }
     var selected by remember(game.gameNumber, game.turnIndex, game.phase) { mutableStateOf(emptySet<Card>()) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var showScoreboard by remember { mutableStateOf(false) }
