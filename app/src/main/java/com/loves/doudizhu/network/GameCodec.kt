@@ -131,7 +131,7 @@ object GameCodec {
             val arr = obj.getJSONArray("readySeats")
             List(3) { index -> index < arr.length() && arr.optBoolean(index, false) }
         } else {
-            List(3) { true }
+            List(3) { false }
         }
         return EngineState(
             phase = Phase.valueOf(obj.getString("phase")),
