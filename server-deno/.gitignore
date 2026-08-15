@@ -6,9 +6,19 @@
 .env
 .env.*
 
+# Self-hosted Deno KV database files
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # Editors and OS metadata
 .idea/
 .vscode/
 *.swp
 Thumbs.db
 Desktop.ini
+
+# APK release artifacts are uploaded to the server, not committed to Git.
+releases/*.apk
+releases/latest.json

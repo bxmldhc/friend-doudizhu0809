@@ -20,6 +20,8 @@ enum class ConnectionState {
 class OnlineClient(
     serverUrl: String,
     private val name: String,
+    private val playerId: String,
+    private val authToken: String?,
     private val onRoom: (
         roomCode: String,
         yourSeat: Int,
@@ -96,11 +98,11 @@ class OnlineClient(
     }
 
     fun createRoom(difficulty: AiDifficulty, aiCount: Int) {
-        webSocket?.send(GameProtocol.encodeCreate(name, difficulty, aiCount))
+        webSocket?.send(GameProtocol.encodeCreate(name, playerId, authToken, difficulty, aiCount))
     }
 
     fun joinRoom(room: String) {
-        webSocket?.send(GameProtocol.encodeJoin(room, name))
+        webSocket?.send(GameProtocol.encodeJoin(room, name, playerId, authToken))
     }
 
     fun reconnectRoom(room: String, token: String) {

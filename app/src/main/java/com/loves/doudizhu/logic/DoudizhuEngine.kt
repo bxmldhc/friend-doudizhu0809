@@ -12,6 +12,15 @@ enum class Phase {
     FINISHED
 }
 
+enum class SeatAction {
+    PLAY,
+    PASS,
+    CALL,
+    NOT_CALL,
+    ROB,
+    NOT_ROB
+}
+
 data class SeatState(
     val index: Int,
     val name: String,
@@ -49,6 +58,13 @@ data class RoomRoundSummary(
     val scores: List<RoomRoundScore>
 )
 
+data class ServerGameEvent(
+    val id: String,
+    val type: String,
+    val seat: Int?,
+    val automatic: Boolean
+)
+
 data class EngineState(
     val phase: Phase,
     val seats: List<SeatState>,
@@ -57,10 +73,12 @@ data class EngineState(
     val bidStartIndex: Int = turnIndex,
     val bidCandidateIndex: Int? = null,
     val bidCount: Int = 0,
+    val bidMultiplier: Int = 1,
     val actedCount: Int = 0,
     val lastPlay: List<Card> = emptyList(),
     val lastPlayerIndex: Int? = null,
     val lastPlaysBySeat: List<List<Card>> = List(3) { emptyList() },
+    val lastActionsBySeat: List<SeatAction?> = List(3) { null },
     val passes: Int = 0,
     val bottomCards: List<Card> = emptyList(),
     val multiplier: Int = 1,
@@ -72,7 +90,9 @@ data class EngineState(
     val actionDeadlineAt: Long? = null,
     val leaderboard: List<RoomLeaderboardEntry> = emptyList(),
     val roundHistory: List<RoomRoundSummary> = emptyList(),
-    val readySeats: List<Boolean> = List(3) { false }
+    val readySeats: List<Boolean> = List(3) { false },
+    val revision: Long = 0,
+    val lastEvent: ServerGameEvent? = null
 ) {
     val currentSeat: SeatState
         get() = seats[turnIndex]
@@ -158,55 +178,76 @@ class DoudizhuEngine(
         val seat = state.seats[state.turnIndex]
         val candidate = if (want) state.turnIndex else state.bidCandidateIndex
         val bidCount = state.bidCount + if (want) 1 else 0
+        val action = when {
+            !want && state.bidCandidateIndex == null -> SeatAction.NOT_CALL
+            !want -> SeatAction.NOT_ROB
+            state.bidCandidateIndex == null -> SeatAction.CALL
+            else -> SeatAction.ROB
+        }
+        val bidMultiplier = if (action == SeatAction.ROB) {
+            state.bidMultiplier * 2
+        } else {
+            state.bidMultiplier
+        }
         val acted = state.actedCount + 1
-        val message = when {
-            !want -> "${seat.name} 不抢"
-            state.bidCandidateIndex == null -> "${seat.name} 叫地主"
-            else -> "${seat.name} 抢地主"
+        val message = when (action) {
+            SeatAction.NOT_CALL -> "${seat.name} 不叫"
+            SeatAction.NOT_ROB -> "${seat.name} 不抢"
+            SeatAction.CALL -> "${seat.name} 叫地主"
+            SeatAction.ROB -> "${seat.name} 抢地主"
+            else -> error("无效的叫抢地主动作")
+        }
+        val actions = state.lastActionsBySeat.mapIndexed { index, previous ->
+            if (index == state.turnIndex) action else previous
         }
 
-        if (acted >= 3) {
-            if (candidate == null) {
-                startNewGame()
-                return
-            }
-            val bottom = state.bottomCards
-            val newSeats = state.seats.mapIndexed { index, seatState ->
-                if (index == candidate) {
-                    seatState.copy(
-                        hand = (seatState.hand + bottom).sorted(),
-                        isLandlord = true,
-                        handCount = seatState.hand.size + bottom.size
-                    )
-                } else {
-                    seatState
-                }
-            }
-            state = state.copy(
-                phase = Phase.PLAYING,
-                seats = newSeats,
-                turnIndex = candidate,
-                landlordIndex = candidate,
-                bidCandidateIndex = null,
-                bidCount = bidCount.coerceAtLeast(1),
-                actedCount = 0,
-                lastPlay = emptyList(),
-                lastPlayerIndex = null,
-                lastPlaysBySeat = List(3) { emptyList() },
-                passes = 0,
-                multiplier = 1,
-                seenRanks = emptyMap(),
-                message = "${newSeats[candidate].name} 成为地主"
-            )
-        } else {
+        if (acted < 3) {
             state = state.copy(
                 turnIndex = nextSeat(state.turnIndex),
                 bidCandidateIndex = candidate,
                 bidCount = bidCount,
+                bidMultiplier = bidMultiplier,
                 actedCount = acted,
+                lastActionsBySeat = actions,
                 message = message
             )
+            return
         }
+
+        if (acted == 3) {
+            if (candidate == null) {
+                startNewGame()
+                return
+            }
+
+            if (candidate == state.bidStartIndex) {
+                state = state.copy(
+                    bidCandidateIndex = candidate,
+                    bidCount = bidCount,
+                    bidMultiplier = bidMultiplier,
+                    actedCount = acted,
+                    lastActionsBySeat = actions,
+                    message = message
+                )
+                confirmLandlord(candidate, bidCount, bidMultiplier)
+                return
+            }
+
+            state = state.copy(
+                turnIndex = state.bidStartIndex,
+                bidCandidateIndex = candidate,
+                bidCount = bidCount,
+                bidMultiplier = bidMultiplier,
+                actedCount = acted,
+                lastActionsBySeat = actions,
+                message = "轮到 ${state.seats[state.bidStartIndex].name} 最终抢地主"
+            )
+            return
+        }
+
+        val landlord = if (want) state.bidStartIndex else state.bidCandidateIndex
+        checkNotNull(landlord) { "地主候选状态无效" }
+        confirmLandlord(landlord, bidCount, bidMultiplier)
     }
 
     fun submitPass() {
@@ -215,18 +256,23 @@ class DoudizhuEngine(
 
         val next = nextSeat(state.turnIndex)
         val message = "${state.seats[state.turnIndex].name} 不出"
+        val actions = state.lastActionsBySeat.mapIndexed { index, previous ->
+            if (index == state.turnIndex) SeatAction.PASS else previous
+        }
         if (state.passes + 1 >= 2) {
             state = state.copy(
                 turnIndex = next,
                 passes = 0,
                 lastPlay = emptyList(),
                 lastPlayerIndex = null,
+                lastActionsBySeat = actions,
                 message = "轮到 ${state.seats[next].name} 出牌"
             )
         } else {
             state = state.copy(
                 turnIndex = next,
                 passes = state.passes + 1,
+                lastActionsBySeat = actions,
                 message = message
             )
         }
@@ -247,8 +293,30 @@ class DoudizhuEngine(
 
         val isBomb = pattern.type == ComboType.BOMB || pattern.type == ComboType.ROCKET
         val multiplier = if (isBomb) state.multiplier * 2 else state.multiplier
+        val playedCards = cards.sorted()
+        val plays = state.lastPlaysBySeat.mapIndexed { index, play ->
+            if (index == state.turnIndex) playedCards else play
+        }
+        val actions = state.lastActionsBySeat.mapIndexed { index, previous ->
+            if (index == state.turnIndex) SeatAction.PLAY else previous
+        }
 
         if (newHand.isEmpty()) {
+            state = state.copy(
+                seats = state.seats.mapIndexed { index, seatState ->
+                    if (index == state.turnIndex) {
+                        seatState.copy(hand = newHand, handCount = 0)
+                    } else {
+                        seatState
+                    }
+                },
+                lastPlay = playedCards,
+                lastPlayerIndex = state.turnIndex,
+                lastPlaysBySeat = plays,
+                lastActionsBySeat = actions,
+                seenRanks = seen,
+                multiplier = multiplier
+            )
             finishGame(state.turnIndex, multiplier)
             return
         }
@@ -262,11 +330,10 @@ class DoudizhuEngine(
                 }
             },
                 turnIndex = nextSeat(state.turnIndex),
-                lastPlay = cards.sorted(),
+                lastPlay = playedCards,
                 lastPlayerIndex = state.turnIndex,
-                lastPlaysBySeat = state.lastPlaysBySeat.mapIndexed { index, play ->
-                    if (index == state.turnIndex) cards.sorted() else play
-                },
+                lastPlaysBySeat = plays,
+                lastActionsBySeat = actions,
                 passes = 0,
             seenRanks = seen,
             multiplier = multiplier,
@@ -289,7 +356,7 @@ class DoudizhuEngine(
 
     private fun finishGame(winnerIndex: Int, multiplier: Int) {
         val landlordIndex = requireNotNull(state.landlordIndex)
-        val base = state.bidCount.coerceAtLeast(1) * multiplier
+        val base = multiplier.coerceAtLeast(1)
         val landlordWon = winnerIndex == landlordIndex
         val delta = List(3) { index ->
             when {
@@ -307,6 +374,39 @@ class DoudizhuEngine(
             scoreDelta = delta,
             multiplier = multiplier,
             message = "${state.seats[winnerIndex].name} 获胜"
+        )
+    }
+
+    private fun confirmLandlord(index: Int, bidCount: Int, bidMultiplier: Int) {
+        val bottom = state.bottomCards
+        val newSeats = state.seats.mapIndexed { seatIndex, seatState ->
+            if (seatIndex == index) {
+                seatState.copy(
+                    hand = (seatState.hand + bottom).sorted(),
+                    isLandlord = true,
+                    handCount = seatState.hand.size + bottom.size
+                )
+            } else {
+                seatState
+            }
+        }
+        state = state.copy(
+            phase = Phase.PLAYING,
+            seats = newSeats,
+            turnIndex = index,
+            landlordIndex = index,
+            bidCandidateIndex = null,
+            bidCount = bidCount.coerceAtLeast(1),
+            bidMultiplier = bidMultiplier,
+            actedCount = 0,
+            lastPlay = emptyList(),
+            lastPlayerIndex = null,
+            lastPlaysBySeat = List(3) { emptyList() },
+            lastActionsBySeat = List(3) { null },
+            passes = 0,
+            multiplier = bidMultiplier,
+            seenRanks = emptyMap(),
+            message = "${newSeats[index].name} 成为地主"
         )
     }
 

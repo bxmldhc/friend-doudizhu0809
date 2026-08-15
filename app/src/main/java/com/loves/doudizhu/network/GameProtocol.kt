@@ -28,20 +28,30 @@ sealed interface NetMessage {
 
 object GameProtocol {
 
-    fun encodeCreate(name: String, difficulty: AiDifficulty, aiCount: Int): String {
+    fun encodeCreate(
+        name: String,
+        playerId: String,
+        authToken: String?,
+        difficulty: AiDifficulty,
+        aiCount: Int
+    ): String {
         val obj = JSONObject()
         obj.put("type", "CREATE")
         obj.put("name", name)
+        obj.put("playerId", playerId)
+        if (!authToken.isNullOrBlank()) obj.put("authToken", authToken)
         obj.put("difficulty", difficulty.name)
         obj.put("aiCount", aiCount.coerceIn(0, 2))
         return obj.toString()
     }
 
-    fun encodeJoin(room: String, name: String): String {
+    fun encodeJoin(room: String, name: String, playerId: String, authToken: String?): String {
         val obj = JSONObject()
         obj.put("type", "JOIN")
         obj.put("room", room)
         obj.put("name", name)
+        obj.put("playerId", playerId)
+        if (!authToken.isNullOrBlank()) obj.put("authToken", authToken)
         return obj.toString()
     }
 

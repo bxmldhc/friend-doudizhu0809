@@ -6,6 +6,8 @@ import com.loves.doudizhu.logic.SeatState
 import com.loves.doudizhu.logic.RoomLeaderboardEntry
 import com.loves.doudizhu.logic.RoomRoundScore
 import com.loves.doudizhu.logic.RoomRoundSummary
+import com.loves.doudizhu.logic.SeatAction
+import com.loves.doudizhu.logic.ServerGameEvent
 import com.loves.doudizhu.model.Card
 import com.loves.doudizhu.model.parseCards
 import com.loves.doudizhu.model.toNotation
@@ -25,11 +27,17 @@ object GameCodec {
         obj.put("bidStartIndex", state.bidStartIndex)
         obj.put("bidCandidateIndex", state.bidCandidateIndex ?: JSONObject.NULL)
         obj.put("bidCount", state.bidCount)
+        obj.put("bidMultiplier", state.bidMultiplier)
         obj.put("actedCount", state.actedCount)
         obj.put("lastPlay", encodeCards(state.lastPlay))
         obj.put("lastPlayerIndex", state.lastPlayerIndex ?: JSONObject.NULL)
         obj.put("lastPlaysBySeat", JSONArray().apply {
             state.lastPlaysBySeat.forEach { put(encodeCards(it)) }
+        })
+        obj.put("lastActionsBySeat", JSONArray().apply {
+            state.lastActionsBySeat.forEach { action ->
+                put(action?.name ?: JSONObject.NULL)
+            }
         })
         obj.put("passes", state.passes)
         obj.put("bottomCards", encodeCards(state.bottomCards))
@@ -76,6 +84,15 @@ object GameCodec {
         obj.put("readySeats", JSONArray().apply {
             state.readySeats.forEach { put(it) }
         })
+        obj.put("revision", state.revision)
+        obj.put("lastEvent", state.lastEvent?.let { event ->
+            JSONObject().apply {
+                put("id", event.id)
+                put("type", event.type)
+                put("seat", event.seat ?: JSONObject.NULL)
+                put("automatic", event.automatic)
+            }
+        } ?: JSONObject.NULL)
         return obj.toString()
     }
 
@@ -133,6 +150,17 @@ object GameCodec {
         } else {
             List(3) { false }
         }
+        val lastActionsBySeat = obj.optJSONArray("lastActionsBySeat")?.let { arr ->
+            List(3) { index ->
+                if (index >= arr.length() || arr.isNull(index)) {
+                    null
+                } else {
+                    runCatching {
+                        SeatAction.valueOf(arr.optString(index))
+                    }.getOrNull()
+                }
+            }
+        } ?: List(3) { null }
         return EngineState(
             phase = Phase.valueOf(obj.getString("phase")),
             seats = seats,
@@ -141,6 +169,7 @@ object GameCodec {
             bidStartIndex = obj.optInt("bidStartIndex", obj.getInt("turnIndex")),
             bidCandidateIndex = nullableInt(obj, "bidCandidateIndex"),
             bidCount = obj.getInt("bidCount"),
+            bidMultiplier = obj.optInt("bidMultiplier", obj.optInt("multiplier", 1)),
             actedCount = obj.getInt("actedCount"),
             lastPlay = decodeCards(obj.getJSONArray("lastPlay")),
             lastPlayerIndex = nullableInt(obj, "lastPlayerIndex"),
@@ -154,6 +183,7 @@ object GameCodec {
                     if (index == nullableInt(obj, "lastPlayerIndex")) decodeCards(obj.getJSONArray("lastPlay")) else emptyList()
                 }
             },
+            lastActionsBySeat = lastActionsBySeat,
             passes = obj.getInt("passes"),
             bottomCards = decodeCards(obj.getJSONArray("bottomCards")),
             multiplier = obj.getInt("multiplier"),
@@ -173,7 +203,16 @@ object GameCodec {
             },
             leaderboard = leaderboard,
             roundHistory = roundHistory,
-            readySeats = readySeats
+            readySeats = readySeats,
+            revision = obj.optLong("revision", 0),
+            lastEvent = obj.optJSONObject("lastEvent")?.let { event ->
+                ServerGameEvent(
+                    id = event.optString("id"),
+                    type = event.optString("type"),
+                    seat = nullableInt(event, "seat"),
+                    automatic = event.optBoolean("automatic", false)
+                )
+            }
         )
     }
 

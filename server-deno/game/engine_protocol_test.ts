@@ -14,7 +14,11 @@ function playingState(): EngineState {
       name: `玩家${index + 1}`,
       isHuman: true,
       isAway: false,
-      hand: index === 0 ? [card(3), card(4)] : index === 1 ? [card(7), card(8)] : [card(5), card(6)],
+      hand: index === 0
+        ? [card(3), card(4)]
+        : index === 1
+        ? [card(7), card(8)]
+        : [card(5), card(6)],
       isLandlord: index === 0,
       score: 0,
     })),
@@ -23,10 +27,12 @@ function playingState(): EngineState {
     bidStartIndex: 0,
     bidCandidateIndex: null,
     bidCount: 1,
+    bidMultiplier: 1,
     actedCount: 0,
     lastPlay: [],
     lastPlayerIndex: null,
     lastPlaysBySeat: [[], [], []],
+    lastActionsBySeat: [null, null, null],
     passes: 0,
     bottomCards: [card(7), card(8), card(9)],
     multiplier: 1,
@@ -51,6 +57,7 @@ function biddingState(): EngineState {
     bidStartIndex: 0,
     bidCandidateIndex: null,
     bidCount: 0,
+    bidMultiplier: 1,
     actedCount: 0,
     bottomCards: [card(7), card(8), card(9)],
     message: "等待叫地主",
@@ -72,14 +79,19 @@ Deno.test("出牌按座位写入本轮独立出牌区，并保留兼容字段", 
 
   engine.submitPlay([card(3)]);
 
-  if (engine.state.lastPlayerIndex !== 0) throw new Error("lastPlayerIndex 未记录出牌座位");
+  if (engine.state.lastPlayerIndex !== 0) {
+    throw new Error("lastPlayerIndex 未记录出牌座位");
+  }
   if (engine.state.lastPlay.length !== 1 || engine.state.lastPlay[0].r !== 3) {
     throw new Error("lastPlay 未保留上一手牌");
   }
   if (engine.state.lastPlaysBySeat[0][0].r !== 3) {
     throw new Error("0 号座位没有记录出牌");
   }
-  if (engine.state.lastPlaysBySeat[1].length !== 0 || engine.state.lastPlaysBySeat[2].length !== 0) {
+  if (
+    engine.state.lastPlaysBySeat[1].length !== 0 ||
+    engine.state.lastPlaysBySeat[2].length !== 0
+  ) {
     throw new Error("其他座位不应出现未出的牌");
   }
 });
@@ -93,13 +105,19 @@ Deno.test("两次 PASS 只清空裁判上一手，保留三家本轮视觉出牌
   engine.submitPlay([card(7)]);
 
   engine.submitPass();
-  if (engine.state.lastPlaysBySeat.some((play) => play.length !== 1) || engine.state.lastPlay.length !== 1) {
+  if (
+    engine.state.lastPlaysBySeat.some((play) => play.length !== 1) ||
+    engine.state.lastPlay.length !== 1
+  ) {
     throw new Error("第一次 PASS 不应破坏本轮三家视觉出牌");
   }
 
   engine.submitPass();
   const stateAfterNewRound = engine.state;
-  if (stateAfterNewRound.lastPlay.length !== 0 || stateAfterNewRound.lastPlayerIndex !== null) {
+  if (
+    stateAfterNewRound.lastPlay.length !== 0 ||
+    stateAfterNewRound.lastPlayerIndex !== null
+  ) {
     throw new Error("两次 PASS 后兼容字段未开启新轮");
   }
   if (stateAfterNewRound.lastPlaysBySeat.some((play) => play.length !== 1)) {
@@ -114,7 +132,10 @@ Deno.test("协议缺少 lastPlaysBySeat 时按旧状态兼容为三个空出牌�
   delete (serialized.seats as Record<string, unknown>[])[1].isAway;
 
   const decoded = deserializeState(serialized);
-  if (decoded.lastPlaysBySeat.length !== 3 || decoded.lastPlaysBySeat.some((play) => play.length !== 0)) {
+  if (
+    decoded.lastPlaysBySeat.length !== 3 ||
+    decoded.lastPlaysBySeat.some((play) => play.length !== 0)
+  ) {
     throw new Error("缺少字段时没有生成三个空出牌区");
   }
   if (decoded.lastPlay.length !== 0 || decoded.seats[0].hand.length !== 2) {
@@ -132,10 +153,16 @@ Deno.test("协议序列化保留三个座位的出牌记录", () => {
   const serialized = serializeState(state, 0);
   const decoded = deserializeState(serialized);
 
-  if (decoded.lastPlaysBySeat[0][0].r !== 10 || decoded.lastPlaysBySeat[0][0].s !== "H") {
+  if (
+    decoded.lastPlaysBySeat[0][0].r !== 10 ||
+    decoded.lastPlaysBySeat[0][0].s !== "H"
+  ) {
     throw new Error("0 号座位出牌记录序列化失败");
   }
-  if (decoded.lastPlaysBySeat[2].length !== 2 || decoded.lastPlaysBySeat[2][1].s !== "C") {
+  if (
+    decoded.lastPlaysBySeat[2].length !== 2 ||
+    decoded.lastPlaysBySeat[2][1].s !== "C"
+  ) {
     throw new Error("2 号座位出牌记录序列化失败");
   }
   if (decoded.seats[1].isHuman || !decoded.seats[1].isAway) {

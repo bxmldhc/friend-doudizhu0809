@@ -1,5 +1,5 @@
 import { Card } from "./cards.ts";
-import { EngineState, Difficulty } from "./engine.ts";
+import { Difficulty, EngineState } from "./engine.ts";
 import { allPlays, beats, classify, ComboType, Pattern } from "./hand.ts";
 
 export type AiAction =
@@ -10,7 +10,7 @@ export type AiAction =
 export function decide(
   state: EngineState,
   difficulty: Difficulty,
-  rand: () => number = Math.random
+  rand: () => number = Math.random,
 ): AiAction {
   if (state.phase === "BIDDING") {
     return biddingDecision(state, difficulty, rand);
@@ -28,7 +28,7 @@ export function decide(
   }
   if (difficulty === "MEDIUM") {
     const best = legal.sort(
-      (a, b) => a.length - b.length || primaryOf(a) - primaryOf(b)
+      (a, b) => a.length - b.length || primaryOf(a) - primaryOf(b),
     )[0];
     return { type: "play", cards: best };
   }
@@ -38,25 +38,24 @@ export function decide(
 function biddingDecision(
   state: EngineState,
   difficulty: Difficulty,
-  rand: () => number
+  rand: () => number,
 ): AiAction {
   const strength = handStrength(state.seats[state.turnIndex].hand);
   const hasCandidate = state.bidCandidateIndex !== null;
-  const shouldCall =
-    difficulty === "EASY"
-      ? rand() < 0.22
-      : difficulty === "MEDIUM"
-      ? strength >= 24
-      : hasCandidate
-      ? strength >= 28
-      : strength >= 22;
+  const shouldCall = difficulty === "EASY"
+    ? rand() < 0.22
+    : difficulty === "MEDIUM"
+    ? strength >= 24
+    : hasCandidate
+    ? strength >= 28
+    : strength >= 22;
   return { type: "call", want: shouldCall };
 }
 
 function hardDecision(
   state: EngineState,
   hand: Card[],
-  legal: Card[][]
+  legal: Card[][],
 ): AiAction {
   const finish = legal.find((play) => play.length === hand.length);
   if (finish) return { type: "play", cards: finish };
@@ -68,7 +67,7 @@ function hardDecision(
 function chooseLeading(
   state: EngineState,
   hand: Card[],
-  legal: Card[][]
+  legal: Card[][],
 ): AiAction {
   const sequenceTypes = new Set([
     "STRAIGHT",
@@ -82,7 +81,7 @@ function chooseLeading(
   );
   if (sequences.length > 0) {
     const best = sequences.sort(
-      (a, b) => b.length - a.length || primaryOf(a) - primaryOf(b)
+      (a, b) => b.length - a.length || primaryOf(a) - primaryOf(b),
     )[0];
     return { type: "play", cards: best };
   }
@@ -121,10 +120,25 @@ function chooseResponse(
   state: EngineState,
   hand: Card[],
   legal: Card[][],
-  last: Card[]
+  last: Card[],
 ): AiAction {
   const lastPattern = classify(last);
   if (!lastPattern) return { type: "pass" };
+  const landlordIndex = state.landlordIndex;
+  const lastPlayerIndex = state.lastPlayerIndex;
+  const teammateLed = landlordIndex !== null &&
+    state.turnIndex !== landlordIndex &&
+    lastPlayerIndex !== null &&
+    lastPlayerIndex !== landlordIndex &&
+    lastPlayerIndex !== state.turnIndex;
+  const landlordDanger = landlordIndex !== null &&
+    state.seats[landlordIndex].hand.length >= 1 &&
+    state.seats[landlordIndex].hand.length <= 3;
+
+  if (teammateLed && !landlordDanger) {
+    return { type: "pass" };
+  }
+
   const normal = legal.filter((p) => {
     const type = classify(p)?.type;
     return type !== "BOMB" && type !== "ROCKET";
@@ -145,7 +159,7 @@ function chooseResponse(
     score: play.length + breakPenalty(hand, play),
   }));
   const best = candidates.sort(
-    (a, b) => a.score - b.score || primaryOf(a.play) - primaryOf(b.play)
+    (a, b) => a.score - b.score || primaryOf(a.play) - primaryOf(b.play),
   )[0];
   if (best) return { type: "play", cards: best.play };
   if (bombs.length > 0 && (hand.length <= 8 || minOpponentCount(state) <= 5)) {
@@ -159,7 +173,7 @@ function chooseSingleResponse(
   hand: Card[],
   normal: Card[][],
   bombs: Card[][],
-  lastPattern: Pattern
+  lastPattern: Pattern,
 ): AiAction {
   const singles = normal
     .filter((p) => classify(p)?.type === "SINGLE")
@@ -170,7 +184,7 @@ function chooseSingleResponse(
       .sort(
         (a, b) =>
           primaryOf(a) - primaryOf(b) ||
-          breakPenalty(hand, a) - breakPenalty(hand, b)
+          breakPenalty(hand, a) - breakPenalty(hand, b),
       )[0];
     if (low) {
       const penalty = breakPenalty(hand, low);
@@ -201,14 +215,14 @@ function choosePairResponse(
   hand: Card[],
   normal: Card[][],
   bombs: Card[][],
-  lastPattern: Pattern
+  lastPattern: Pattern,
 ): AiAction {
   const pairs = normal.filter((p) => classify(p)?.type === "PAIR");
   if (pairs.length > 0) {
     const best = pairs.sort(
       (a, b) =>
         primaryOf(a) - primaryOf(b) ||
-        breakPenalty(hand, a) - breakPenalty(hand, b)
+        breakPenalty(hand, a) - breakPenalty(hand, b),
     )[0];
     const penalty = breakPenalty(hand, best);
     if (
@@ -231,7 +245,7 @@ function minOpponentCount(state: EngineState): number {
   const t = state.turnIndex;
   return Math.min(
     state.seats[(t + 1) % 3].hand.length,
-    state.seats[(t + 2) % 3].hand.length
+    state.seats[(t + 2) % 3].hand.length,
   );
 }
 

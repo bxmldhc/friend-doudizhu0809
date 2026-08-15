@@ -55,6 +55,9 @@ $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Debug APK 只用于 Android Studio 和本机调试，不用于发给朋友或应用内更新。
+正式发布请使用 `assembleRelease`，并按根目录的 `自动更新发布手册.md` 操作。
+
 安装到已连接的手机：
 
 ```powershell

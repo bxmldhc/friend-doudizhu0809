@@ -1,0 +1,6 @@
+# Copy this file to app/signing.properties and replace every placeholder.
+# Never commit app/signing.properties or the keystore.
+storeFile=app/keystore/friend-doudizhu-release.jks
+storePassword=replace-with-a-strong-password
+keyAlias=friend-doudizhu
+keyPassword=replace-with-a-strong-password

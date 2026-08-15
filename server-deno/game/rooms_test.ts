@@ -1,4 +1,6 @@
 import { RoomManager } from "./rooms.ts";
+import { kv } from "./db.ts";
+import { getStats } from "./store.ts";
 
 class FakeSocket {
   readyState = 1;
@@ -84,6 +86,53 @@ Deno.test("2 个 AI：1 名真人可以开始", () => {
   }
 });
 
+Deno.test("只有认证账号会写入累计战绩，旧版游客仅保留场内分", async () => {
+  const guestId = `guest_${crypto.randomUUID().replaceAll("-", "")}`;
+  const accountId = `account_${crypto.randomUUID().replaceAll("-", "")}`;
+  await kv.delete(["players", guestId]);
+  await kv.delete(["players", accountId]);
+
+  try {
+    const guestManager = new RoomManager({ aiDelayMs: 0 });
+    const guest = new FakeSocket();
+    const guestCode = guestManager.create(
+      socket(guest),
+      "旧版游客",
+      "MEDIUM",
+      2,
+      guestId,
+      false,
+    );
+    guestManager.start(socket(guest));
+    finishCurrentGame(guestManager, guestCode);
+
+    const accountManager = new RoomManager({ aiDelayMs: 0 });
+    const account = new FakeSocket();
+    const accountCode = accountManager.create(
+      socket(account),
+      "认证玩家",
+      "MEDIUM",
+      2,
+      accountId,
+      true,
+    );
+    accountManager.start(socket(account));
+    finishCurrentGame(accountManager, accountCode);
+
+    await wait(30);
+    if (await getStats(guestId)) {
+      throw new Error("未认证游客不应写入累计账号战绩");
+    }
+    const stats = await getStats(accountId);
+    if (!stats || stats.games !== 1 || stats.totalScore !== 2) {
+      throw new Error("认证账号的累计战绩没有正确保存");
+    }
+  } finally {
+    await kv.delete(["players", guestId]);
+    await kv.delete(["players", accountId]);
+  }
+});
+
 Deno.test("1 个 AI：需要 2 名真人，人数不足时拒绝开始", () => {
   const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
@@ -93,7 +142,10 @@ Deno.test("1 个 AI：需要 2 名真人，人数不足时拒绝开始", () => {
 
   manager.start(socket(host));
   const rejected = lastMessage(host);
-  if (rejected.type !== "ERROR" || !String(rejected.message).includes("还需要加入 1 名真人")) {
+  if (
+    rejected.type !== "ERROR" ||
+    !String(rejected.message).includes("还需要加入 1 名真人")
+  ) {
     throw new Error("人数不足时没有返回正确错误");
   }
 
@@ -165,7 +217,10 @@ Deno.test("等待区断线释放为空位，游戏中断线保留座位并由 AI
   const awayState = awayStateMessage.state as Record<string, unknown>;
   const awaySeats = awayState.seats as Record<string, unknown>[];
   const awaySeat = awaySeats[activeSeat];
-  if (awaySeat.name !== activeName || awaySeat.isHuman !== false || awaySeat.isAway !== true) {
+  if (
+    awaySeat.name !== activeName || awaySeat.isHuman !== false ||
+    awaySeat.isAway !== true
+  ) {
     throw new Error("游戏中断线没有保留昵称/座位或没有标记为暂离");
   }
 
@@ -204,7 +259,9 @@ Deno.test("游戏中断线后可凭恢复凭证回到原座位", async () => {
   if (!result.ok) throw new Error(result.message ?? "恢复失败");
 
   const room = latestRoom(resumed);
-  if (room.type !== "ROOM" || room.yourSeat !== 0 || room.resumeToken !== token) {
+  if (
+    room.type !== "ROOM" || room.yourSeat !== 0 || room.resumeToken !== token
+  ) {
     throw new Error("恢复后没有回到原座位或恢复凭证不一致");
   }
   const state = latestState(resumed).state as Record<string, unknown>;
@@ -293,7 +350,9 @@ Deno.test("游戏中房主退出不销毁房间，玩家身份和排行榜分数
   const state = latestState(friend).state as Record<string, unknown>;
   const leaderboard = state.leaderboard as Record<string, unknown>[];
   const formerHost = leaderboard.find((entry) => entry.name === "房主");
-  if (!formerHost || formerHost.isActive !== true || formerHost.isAway !== true) {
+  if (
+    !formerHost || formerHost.isActive !== true || formerHost.isAway !== true
+  ) {
     throw new Error("游戏中退出的房主没有作为暂离玩家保留在排行榜");
   }
   if (latestRoom(friend).hostSeat === 0) {
@@ -349,7 +408,10 @@ Deno.test("结算后所有真人必须准备，AI 默认准备，房主才能开
 
   manager.restart(socket(host));
   const rejected = lastMessage(host);
-  if (rejected.type !== "ERROR" || !String(rejected.message).includes("所有玩家准备")) {
+  if (
+    rejected.type !== "ERROR" ||
+    !String(rejected.message).includes("所有玩家准备")
+  ) {
     throw new Error("真人未全部准备时房主仍能开始下一局");
   }
 
@@ -380,7 +442,10 @@ Deno.test("非房主不能开始下一局，进行中也不能提前准备", () 
 
   manager.setReady(socket(friend), true);
   const earlyReady = lastMessage(friend);
-  if (earlyReady.type !== "ERROR" || !String(earlyReady.message).includes("本局结束后")) {
+  if (
+    earlyReady.type !== "ERROR" ||
+    !String(earlyReady.message).includes("本局结束后")
+  ) {
     throw new Error("进行中准备没有被服务器拒绝");
   }
 
@@ -390,7 +455,9 @@ Deno.test("非房主不能开始下一局，进行中也不能提前准备", () 
   manager.setReady(socket(anotherFriend), true);
   manager.restart(socket(friend));
   const rejected = lastMessage(friend);
-  if (rejected.type !== "ERROR" || !String(rejected.message).includes("只有房主")) {
+  if (
+    rejected.type !== "ERROR" || !String(rejected.message).includes("只有房主")
+  ) {
     throw new Error("非房主可以开始下一局");
   }
 });
@@ -408,8 +475,15 @@ Deno.test("结算后离开会释放旧凭证，原玩家可作为普通玩家重
 
   manager.leave(socket(friend));
   const staleReconnect = new FakeSocket();
-  const reconnectResult = manager.reconnect(socket(staleReconnect), code, oldToken);
-  if (reconnectResult.ok || !String(reconnectResult.message).includes("恢复凭证无效")) {
+  const reconnectResult = manager.reconnect(
+    socket(staleReconnect),
+    code,
+    oldToken,
+  );
+  if (
+    reconnectResult.ok ||
+    !String(reconnectResult.message).includes("恢复凭证无效")
+  ) {
     throw new Error("结算后离开仍可使用旧凭证认领座位");
   }
 
@@ -417,5 +491,46 @@ Deno.test("结算后离开会释放旧凭证，原玩家可作为普通玩家重
   const joinResult = manager.join(socket(rejoined), code, "朋友");
   if (!joinResult.ok || latestRoom(rejoined).yourSeat !== 1) {
     throw new Error(joinResult.message ?? "结算后无法作为普通玩家重新加入");
+  }
+});
+Deno.test("state events use unique revisions for confirmed player actions", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const players = [new FakeSocket(), new FakeSocket(), new FakeSocket()];
+  manager.create(socket(players[0]), "host", "MEDIUM", 0);
+  const code = roomCode(players[0]);
+  manager.join(socket(players[1]), code, "friend-1");
+  manager.join(socket(players[2]), code, "friend-2");
+  manager.start(socket(players[0]));
+
+  const started = latestState(players[0]).state as Record<string, unknown>;
+  const startedEvent = started.lastEvent as Record<string, unknown>;
+  const startedRevision = Number(started.revision);
+  if (
+    startedRevision < 1 ||
+    startedEvent.type !== "ROUND_STARTED" ||
+    startedEvent.id !== `${code}:1:${startedRevision}`
+  ) {
+    throw new Error(
+      "round start event was not serialized with a stable revision",
+    );
+  }
+
+  const turnIndex = Number(started.turnIndex);
+  manager.action(
+    socket(players[turnIndex]),
+    turnIndex,
+    { kind: "CALL", want: false },
+  );
+
+  const acted = latestState(players[0]).state as Record<string, unknown>;
+  const actedEvent = acted.lastEvent as Record<string, unknown>;
+  if (
+    Number(acted.revision) !== startedRevision + 1 ||
+    actedEvent.id === startedEvent.id ||
+    actedEvent.type !== "NOT_CALL" ||
+    actedEvent.seat !== turnIndex ||
+    actedEvent.automatic !== false
+  ) {
+    throw new Error("confirmed action did not advance the authoritative event");
   }
 });

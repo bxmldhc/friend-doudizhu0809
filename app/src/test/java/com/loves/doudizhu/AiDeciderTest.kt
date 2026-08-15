@@ -7,6 +7,7 @@ import com.loves.doudizhu.logic.Phase
 import com.loves.doudizhu.logic.SeatState
 import com.loves.doudizhu.model.AiDifficulty
 import com.loves.doudizhu.model.parseCards
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -33,6 +34,49 @@ class AiDeciderTest {
         )
     }
 
+    private fun farmerPlayingState(
+        hand: String,
+        last: String,
+        lastPlayerIndex: Int = 2,
+        landlordHand: String
+    ): EngineState {
+        val seats = listOf(
+            SeatState(
+                0,
+                "鐜╁1",
+                true,
+                parseCards(landlordHand),
+                true,
+                0
+            ),
+            SeatState(
+                1,
+                "灏忔櫤",
+                false,
+                parseCards(hand),
+                false,
+                0
+            ),
+            SeatState(
+                2,
+                "闃垮己",
+                false,
+                parseCards("10H 10S JH JS"),
+                false,
+                0
+            )
+        )
+        return EngineState(
+            phase = Phase.PLAYING,
+            seats = seats,
+            turnIndex = 1,
+            lastPlay = parseCards(last),
+            lastPlayerIndex = lastPlayerIndex,
+            landlordIndex = 0,
+            bidCount = 1
+        )
+    }
+
     @Test
     fun mediumAlwaysPlaysWhenItCanBeat() {
         val state = playingState(hand = "8H 8S 9H", last = "7H 7S")
@@ -47,6 +91,47 @@ class AiDeciderTest {
         val action = AiDecider.decide(state, AiDifficulty.HARD, Random(1))
         assertTrue(action is AiAction.Play)
         assertTrue((action as AiAction.Play).cards.isNotEmpty())
+    }
+
+    @Test
+    fun farmerPassesWhenTeammateHasTheTrick() {
+        val state = farmerPlayingState(
+            hand = "8H 9H",
+            last = "7H",
+            landlordHand = "3H 3S 4H 4S 5H 5S 6H 6S"
+        )
+
+        val action = AiDecider.decide(state, AiDifficulty.HARD, Random(1))
+
+        assertEquals(AiAction.Pass, action)
+    }
+
+    @Test
+    fun farmerBlocksTeammatePlayWhenLandlordHasThreeCards() {
+        val state = farmerPlayingState(
+            hand = "8H 9H",
+            last = "7H",
+            landlordHand = "AH AS"
+        )
+
+        val action = AiDecider.decide(state, AiDifficulty.HARD, Random(1))
+
+        assertTrue(action is AiAction.Play)
+        assertEquals(parseCards("9H"), (action as AiAction.Play).cards)
+    }
+
+    @Test
+    fun farmerStillAnswersLandlordWhenLandlordIsAboutToWin() {
+        val state = farmerPlayingState(
+            hand = "8H 9H",
+            last = "7H",
+            lastPlayerIndex = 0,
+            landlordHand = "AH AS"
+        )
+
+        val action = AiDecider.decide(state, AiDifficulty.MEDIUM, Random(1))
+
+        assertTrue(action is AiAction.Play)
     }
 
     @Test

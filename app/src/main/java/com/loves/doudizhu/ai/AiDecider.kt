@@ -39,6 +39,9 @@ object AiDecider {
         }
         if (legal.isEmpty()) return AiAction.Pass
 
+        val strategicOverride = strategicResponse(state, hand, legal)
+        if (strategicOverride != null) return strategicOverride
+
         return when (difficulty) {
             AiDifficulty.EASY -> easyDecision(legal, random)
             AiDifficulty.MEDIUM -> mediumDecision(legal)
@@ -59,6 +62,78 @@ object AiDecider {
             AiDifficulty.HARD -> if (hasCandidate) strength >= 28 else strength >= 22
         }
         return AiAction.Call(shouldCall)
+    }
+
+    /**
+     * Farmers should not take a teammate's trick unless the landlord is close
+     * to winning. In that emergency case, taking the trick is preferable to
+     * preserving a small amount of card structure.
+     */
+    private fun strategicResponse(
+        state: EngineState,
+        hand: List<Card>,
+        legal: List<List<Card>>
+    ): AiAction? {
+        if (state.isLeadingTurn()) return null
+
+        val landlordIndex = state.landlordIndex ?: return null
+        val isFarmer = state.turnIndex != landlordIndex
+        val lastPlayerIndex = state.lastPlayerIndex ?: return null
+        val teammatePlayed = isFarmer &&
+            lastPlayerIndex != state.turnIndex &&
+            lastPlayerIndex != landlordIndex
+
+        if (teammatePlayed && !landlordIsThreatening(state)) {
+            return AiAction.Pass
+        }
+        if (!landlordIsThreatening(state)) return null
+
+        val normal = legal.filterNot(::isBomb)
+        val bombs = legal.filter(::isBomb)
+        val selected = if (teammatePlayed) {
+            legal.maxWithOrNull(
+                compareBy(
+                    { responsePriority(it) },
+                    { rankOf(it).order },
+                    { it.size }
+                )
+            )
+        } else {
+            normal.minWithOrNull(
+                compareBy(
+                    { breakPenalty(hand, it) },
+                    { rankOf(it).order },
+                    { it.size }
+                )
+            ) ?: bombs.minWithOrNull(
+                compareBy(
+                    { responsePriority(it) },
+                    { rankOf(it).order },
+                    { it.size }
+                )
+            )
+        }
+        return AiAction.Play(selected ?: legal.first())
+    }
+
+    private fun landlordIsThreatening(state: EngineState): Boolean {
+        val landlordIndex = state.landlordIndex ?: return false
+        return state.seats[landlordIndex].hand.size in 1..3
+    }
+
+    private fun responsePriority(cards: List<Card>): Int {
+        return when (HandEvaluator.classify(cards)?.type) {
+            ComboType.ROCKET -> 3
+            ComboType.BOMB -> 2
+            else -> 1
+        }
+    }
+
+    private fun isBomb(cards: List<Card>): Boolean {
+        return HandEvaluator.classify(cards)?.type in setOf(
+            ComboType.BOMB,
+            ComboType.ROCKET
+        )
     }
 
     private fun easyDecision(legal: List<List<Card>>, random: Random): AiAction {

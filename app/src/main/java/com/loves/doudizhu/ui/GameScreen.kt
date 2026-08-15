@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material3.Button
@@ -52,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import com.loves.doudizhu.R
 import com.loves.doudizhu.logic.EngineState
 import com.loves.doudizhu.logic.Phase
+import com.loves.doudizhu.logic.SeatAction
 import com.loves.doudizhu.logic.SeatState
 import com.loves.doudizhu.logic.RoomLeaderboardEntry
 import com.loves.doudizhu.model.Card
@@ -89,6 +91,9 @@ fun GameScreen(
     var selected by remember(game.gameNumber, game.turnIndex, game.phase) { mutableStateOf(emptySet<Card>()) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var showScoreboard by remember { mutableStateOf(false) }
+    var showRoundScore by remember(game.gameNumber, game.phase) {
+        mutableStateOf(game.phase == Phase.FINISHED)
+    }
 
     LaunchedEffect(game.gameNumber, game.turnIndex, game.phase) {
         if (game.phase != Phase.FINISHED) selected = emptySet()
@@ -117,9 +122,11 @@ fun GameScreen(
                 onCall = onCall,
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
-            if (mySeat != null && game.phase != Phase.FINISHED) {
+            if (mySeat != null) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(112.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(if (game.phase == Phase.FINISHED) 122.dp else 112.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -128,15 +135,22 @@ fun GameScreen(
                         active = isMyTurn,
                         modifier = Modifier.width(132.dp)
                     )
-                    HandRow(
-                        cards = mySeat.hand,
-                        selected = selected,
-                        enabled = canPlay,
-                        modifier = Modifier.weight(1f),
-                        onToggle = { card ->
-                            selected = if (card in selected) selected - card else selected + card
-                        }
-                    )
+                    if (game.phase == Phase.FINISHED) {
+                        FinishedHandRows(
+                            cards = mySeat.hand,
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        HandRow(
+                            cards = mySeat.hand,
+                            selected = selected,
+                            enabled = canPlay,
+                            modifier = Modifier.weight(1f),
+                            onToggle = { card ->
+                                selected = if (card in selected) selected - card else selected + card
+                            }
+                        )
+                    }
                 }
             }
             Controls(
@@ -147,13 +161,24 @@ fun GameScreen(
                 selected = selected,
                 onCall = onCall,
                 onPlay = { onPlay(selected.sorted()) },
-                onPass = onPass
+                onPass = onPass,
+                isHost = state.isHost,
+                canRestart = state.isHost && requiredPlayersPresent && game.readySeats.all { it },
+                isReady = game.readySeats.getOrNull(state.mySeat) == true,
+                onReady = onReady,
+                onRestart = onRestart
             )
         }
         if (state.connection == AppConnectionState.RECONNECTING) {
             ReconnectingOverlay(onRetry)
         }
-        if (showScoreboard && game.phase != Phase.FINISHED) {
+        if (showRoundScore && game.phase == Phase.FINISHED) {
+            RoundScorePanel(
+                game = game,
+                onDismiss = { showRoundScore = false }
+            )
+        }
+        if (showScoreboard) {
             ScoreboardPanel(
                 entries = game.leaderboard.ifEmpty {
                     game.seats.map { seat ->
@@ -169,18 +194,6 @@ fun GameScreen(
                     }.sortedByDescending { it.score }
                 },
                 onDismiss = { showScoreboard = false }
-            )
-        }
-        if (game.phase == Phase.FINISHED) {
-            ResultPanel(
-                game = game,
-                mySeat = state.mySeat,
-                isHost = state.isHost,
-                canRestart = state.isHost && requiredPlayersPresent && game.readySeats.all { it },
-                isReady = game.readySeats.getOrNull(state.mySeat) == true,
-                onReady = onReady,
-                onRestart = onRestart,
-                onExit = { showExitConfirm = true }
             )
         }
         if (showExitConfirm) {
@@ -409,6 +422,7 @@ private fun TriangleTable(
                 TablePlayer(
                     seat = leftOpponent,
                     play = game.lastPlaysBySeat.getOrNull(leftOpponent.index).orEmpty(),
+                    action = game.lastActionsBySeat.getOrNull(leftOpponent.index),
                     active = game.turnIndex == leftOpponent.index && game.phase != Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
@@ -419,6 +433,7 @@ private fun TriangleTable(
                 TablePlayer(
                     seat = rightOpponent,
                     play = game.lastPlaysBySeat.getOrNull(rightOpponent.index).orEmpty(),
+                    action = game.lastActionsBySeat.getOrNull(rightOpponent.index),
                     active = game.turnIndex == rightOpponent.index && game.phase != Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
@@ -429,6 +444,7 @@ private fun TriangleTable(
                 PlayPool(
                     seat = selfSeat,
                     play = game.lastPlaysBySeat.getOrNull(selfSeat.index).orEmpty(),
+                    action = game.lastActionsBySeat.getOrNull(selfSeat.index),
                     active = game.turnIndex == selfSeat.index && game.phase != Phase.FINISHED,
                     width = playWidth,
                     modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-2).dp)
@@ -457,6 +473,7 @@ private fun TriangleTable(
 private fun TablePlayer(
     seat: SeatState,
     play: List<Card>,
+    action: SeatAction?,
     active: Boolean,
     width: Dp,
     playWidth: Dp,
@@ -472,7 +489,7 @@ private fun TablePlayer(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(4.dp))
-        PlayPool(seat = seat, play = play, active = active, width = playWidth)
+        PlayPool(seat = seat, play = play, action = action, active = active, width = playWidth)
     }
 }
 
@@ -480,13 +497,14 @@ private fun TablePlayer(
 private fun PlayPool(
     seat: SeatState,
     play: List<Card>,
+    action: SeatAction?,
     active: Boolean,
     width: Dp,
     modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier.width(width).height(88.dp),
-        color = if (play.isEmpty()) Color(0x55204E4A) else Color(0xAA123E42),
+        color = if (action == null) Color(0x55204E4A) else Color(0xAA123E42),
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(
             width = if (active) 2.dp else 1.dp,
@@ -515,27 +533,51 @@ private fun PlayPool(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                if (play.isEmpty()) {
-                    Text("本轮未出牌", color = Muted, fontSize = 10.sp)
-                } else {
-                    val cardWidth = minOf(36.dp, maxWidth)
-                    val step = if (play.size == 1) {
-                        0.dp
-                    } else {
-                        ((maxWidth - cardWidth) / (play.size - 1))
-                            .coerceAtLeast(4.dp)
-                            .coerceAtMost(cardWidth * .62f)
+                when (action) {
+                    SeatAction.PLAY -> {
+                        if (play.isEmpty()) {
+                            Text("已出牌", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            val cardWidth = minOf(36.dp, maxWidth)
+                            val step = if (play.size == 1) {
+                                0.dp
+                            } else {
+                                ((maxWidth - cardWidth) / (play.size - 1))
+                                    .coerceAtLeast(4.dp)
+                                    .coerceAtMost(cardWidth * .62f)
+                            }
+                            CardRow(
+                                cards = play,
+                                width = cardWidth,
+                                height = minOf(52.dp, maxHeight - 2.dp),
+                                step = step
+                            )
+                        }
                     }
-                    CardRow(
-                        cards = play,
-                        width = cardWidth,
-                        height = minOf(52.dp, maxHeight - 2.dp),
-                        step = step
+                    SeatAction.PASS -> SeatActionLabel("不出")
+                    SeatAction.CALL -> SeatActionLabel("叫地主", Wax)
+                    SeatAction.NOT_CALL -> SeatActionLabel("不叫")
+                    SeatAction.ROB -> SeatActionLabel("抢地主", Wax)
+                    SeatAction.NOT_ROB -> SeatActionLabel("不抢")
+                    null -> Text(
+                        "本轮未操作",
+                        color = Muted,
+                        fontSize = 10.sp
                     )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SeatActionLabel(text: String, color: Color = Color.White) {
+    Text(
+        text = text,
+        color = color,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold
+    )
 }
 
 @Composable
@@ -635,13 +677,50 @@ private fun Controls(
     selected: Set<Card>,
     onCall: (Boolean) -> Unit,
     onPlay: () -> Unit,
-    onPass: () -> Unit
+    onPass: () -> Unit,
+    isHost: Boolean,
+    canRestart: Boolean,
+    isReady: Boolean,
+    onReady: (Boolean) -> Unit,
+    onRestart: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         when {
+            game.phase == Phase.FINISHED -> {
+                Button(
+                    onClick = { onReady(!isReady) },
+                    modifier = Modifier.weight(1f).height(52.dp),
+                    enabled = game.seats.getOrNull(state.mySeat)?.isHuman == true,
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                ) {
+                    Text(if (isReady) "取消准备" else "准备", fontWeight = FontWeight.Bold)
+                }
+                if (isHost) {
+                    Button(
+                        onClick = onRestart,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        enabled = canRestart,
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                    ) {
+                        Text(if (canRestart) "开始下一局" else "等待全员准备", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (isReady) "已准备，等待房主开始" else "准备后等待房主开始",
+                            color = Muted,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
             canBid -> {
                 ActionButton(
                     resource = if (game.bidCandidateIndex == null) R.drawable.actions_action_call else R.drawable.actions_action_rob,
@@ -754,6 +833,60 @@ private fun HandRow(
 }
 
 @Composable
+private fun FinishedHandRows(
+    cards: List<Card>,
+    modifier: Modifier = Modifier
+) {
+    val sortedCards = cards.sortedDescending()
+    if (sortedCards.isEmpty()) {
+        Box(
+            modifier = modifier.fillMaxWidth().height(112.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("已出完手牌", color = Wax, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        }
+        return
+    }
+
+    val rows = if (sortedCards.size > 10) {
+        val firstRowSize = (sortedCards.size + 1) / 2
+        listOf(sortedCards.take(firstRowSize), sortedCards.drop(firstRowSize))
+    } else {
+        listOf(sortedCards)
+    }
+    BoxWithConstraints(modifier = modifier.fillMaxWidth().height(116.dp)) {
+        val availableWidth = maxWidth
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            rows.forEach { rowCards ->
+                val cardWidth = ((availableWidth - 12.dp) / 8f).coerceIn(34.dp, 42.dp)
+                val step = if (rowCards.size == 1) {
+                    0.dp
+                } else {
+                    ((availableWidth - cardWidth) / (rowCards.size - 1))
+                        .coerceAtLeast(15.dp)
+                        .coerceAtMost(cardWidth * .62f)
+                }
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(57.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CardRow(
+                        cards = rowCards,
+                        width = cardWidth,
+                        height = cardWidth * 1.35f,
+                        step = step
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CardRow(
     cards: List<Card>,
     width: Dp,
@@ -838,107 +971,63 @@ private fun ReconnectingOverlay(onRetry: () -> Unit) {
 }
 
 @Composable
-private fun ResultPanel(
+private fun RoundScorePanel(
     game: EngineState,
-    mySeat: Int,
-    isHost: Boolean,
-    canRestart: Boolean,
-    isReady: Boolean,
-    onReady: (Boolean) -> Unit,
-    onRestart: () -> Unit,
-    onExit: () -> Unit
+    onDismiss: () -> Unit
 ) {
     val winner = game.seats.getOrNull(game.winnerIndex ?: 0)
     Box(
-        modifier = Modifier.fillMaxSize().background(Color(0xCC091F27)),
-        contentAlignment = Alignment.Center
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopStart
     ) {
-        Surface(color = Color(0xF212333B), shape = RoundedCornerShape(22.dp)) {
-            Row(
-                modifier = Modifier.padding(26.dp),
-                horizontalArrangement = Arrangement.spacedBy(28.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.width(220.dp)) {
-                    Text("本局结算", color = Wax, fontSize = 14.sp)
-                    Text(
-                        winner?.let { "${it.name} 获胜" } ?: "牌局结束",
-                        color = Color.White,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(7.dp))
-                    Text("服务器倍数 ×${game.multiplier}", color = Muted, fontSize = 13.sp)
-                    Text(game.message, color = Muted, fontSize = 13.sp)
-                }
-                Column(modifier = Modifier.width(260.dp)) {
-                    game.seats.forEach { seat ->
-                        val delta = game.scoreDelta.getOrNull(seat.index) ?: 0
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "${seat.name}${if (seat.isLandlord) " · 地主" else " · 农民"}",
-                                color = Color.White,
-                                fontSize = 13.sp
-                            )
-                            Text(
-                                "本局 ${if (delta >= 0) "+" else ""}$delta · 累计 ${seat.score}",
-                                color = if (delta >= 0) Color(0xFF7ED9A3) else Color(0xFFF28B78),
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("下一局准备状态", color = Wax, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    game.seats.forEach { seat ->
-                        val ready = game.readySeats.getOrNull(seat.index) == true
+        Surface(
+            modifier = Modifier.padding(top = 58.dp, start = 18.dp).width(300.dp),
+            color = Color(0xF212333B),
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = .14f))
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("本局结算", color = Wax, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            "${seat.name}: ${if (ready) "已准备" else "等待准备"}${if (!seat.isHuman) " · AI默认准备" else ""}",
-                            color = if (ready) Color(0xFF7ED9A3) else Muted,
-                            fontSize = 11.sp
+                            winner?.let { "${it.name} 获胜" } ?: "牌局结束",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { onReady(!isReady) },
-                            modifier = Modifier.weight(1f),
-                            enabled = game.seats.getOrNull(mySeat)?.isHuman == true,
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
-                        ) {
-                            Text(if (isReady) "取消准备" else "准备")
-                        }
-                        if (isHost) {
-                            Button(
-                                onClick = onRestart,
-                                modifier = Modifier.weight(1f),
-                                enabled = canRestart,
-                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
-                            ) {
-                                Text(if (canRestart) "开始下一局" else "等待全员")
-                            }
-                        } else {
-                            Box(
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    if (isReady) "已准备，等待房主" else "准备后等待房主",
-                                    color = Muted,
-                                    fontSize = 12.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Close, "关闭本局结算", tint = Muted)
                     }
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = onExit, modifier = Modifier.fillMaxWidth()) {
-                            Text("返回首页")
-                        }
+                }
+                Text(
+                    "服务器倍数 ×${game.multiplier}",
+                    color = Muted,
+                    fontSize = 11.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                game.seats.forEach { seat ->
+                    val delta = game.scoreDelta.getOrNull(seat.index) ?: 0
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${seat.name}${if (seat.isLandlord) " · 地主" else " · 农民"}",
+                            color = Color.White,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            "${if (delta >= 0) "+" else ""}$delta",
+                            color = if (delta >= 0) Color(0xFF7ED9A3) else Color(0xFFF28B78),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
                     }
                 }
             }

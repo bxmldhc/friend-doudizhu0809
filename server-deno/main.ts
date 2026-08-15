@@ -1,15 +1,31 @@
 import { RoomManager } from "./game/rooms.ts";
+import { handleApiRequest } from "./api.ts";
+import { handleUpdateRequest } from "./updates.ts";
 
 const manager = new RoomManager();
 const port = Number(Deno.env.get("PORT") ?? 18080);
 
-Deno.serve({ port }, (req) => {
+Deno.serve({ port }, async (req) => {
   const url = new URL(req.url);
+  if (req.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-headers": "authorization, content-type",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+      },
+    });
+  }
+  const updateResponse = await handleUpdateRequest(req);
+  if (updateResponse) return updateResponse;
+  const apiResponse = await handleApiRequest(req);
+  if (apiResponse) return apiResponse;
   if (url.pathname === "/ws") {
     const { socket, response } = Deno.upgradeWebSocket(req);
-    socket.onmessage = (event) => {
+    socket.onmessage = async (event) => {
       try {
-        manager.handleMessage(socket, String(event.data));
+        await manager.handleMessage(socket, String(event.data));
       } catch (err) {
         socket.send(JSON.stringify({
           type: "ERROR",

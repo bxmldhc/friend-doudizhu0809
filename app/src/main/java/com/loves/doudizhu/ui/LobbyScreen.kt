@@ -42,6 +42,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import com.loves.doudizhu.R
+import com.loves.doudizhu.network.InviteLink
 
 private val LobbyBg = Color(0xFF091F27)
 private val Panel = Color(0xFF12333B)
@@ -122,9 +123,13 @@ fun LobbyScreen(
                             Intent.createChooser(
                                 Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, "来好友斗地主，房号：${state.roomCode}")
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "来好友斗地主，房号：${state.roomCode}\n" +
+                                            "点击直接加入：${InviteLink.create(state.roomCode)}"
+                                    )
                                 },
-                                "分享房号"
+                                "分享房间"
                             )
                         )
                     }

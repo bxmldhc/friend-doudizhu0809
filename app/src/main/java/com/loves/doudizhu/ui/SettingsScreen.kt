@@ -16,12 +16,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +46,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,7 +89,10 @@ fun HomeScreen(
     state: GameUiState.Home,
     onCreate: () -> Unit,
     onJoin: () -> Unit,
-    onHistory: () -> Unit
+    onHistory: () -> Unit,
+    onLogout: () -> Unit,
+    onVoiceEnabledChange: (Boolean) -> Unit,
+    onCheckUpdate: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxSize().background(PageBg).padding(24.dp),
@@ -129,6 +138,10 @@ fun HomeScreen(
                 ConnectionDot(state.connection)
                 Spacer(Modifier.width(8.dp))
                 Text(connectionText(state.connection), color = Muted, fontSize = 13.sp)
+                Spacer(Modifier.width(16.dp))
+                Icon(Icons.Default.Person, contentDescription = null, tint = Muted)
+                Spacer(Modifier.width(5.dp))
+                Text(state.nickname, color = Color.White, fontSize = 13.sp)
             }
         }
         Surface(
@@ -171,46 +184,191 @@ fun HomeScreen(
                 Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
             }
             Text("战绩", color = Muted, fontSize = 11.sp)
+            Spacer(Modifier.height(12.dp))
+            IconButton(onClick = onCheckUpdate, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
+            }
+            Text("更新", color = Muted, fontSize = 11.sp)
+            Spacer(Modifier.height(12.dp))
+            IconButton(
+                onClick = { onVoiceEnabledChange(!state.voiceEnabled) },
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    imageVector = if (state.voiceEnabled) {
+                        Icons.AutoMirrored.Filled.VolumeUp
+                    } else {
+                        Icons.AutoMirrored.Filled.VolumeOff
+                    },
+                    contentDescription = if (state.voiceEnabled) "关闭语音" else "开启语音",
+                    tint = if (state.voiceEnabled) Wax else Muted
+                )
+            }
+            Text(if (state.voiceEnabled) "语音开" else "语音关", color = Muted, fontSize = 11.sp)
+            Spacer(Modifier.height(12.dp))
+            IconButton(onClick = onLogout, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "退出登录", tint = Color.White)
+            }
+            Text("退出", color = Muted, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+fun AuthScreen(
+    state: GameUiState.Auth,
+    onSubmit: (register: Boolean, nickname: String, password: String, serverUrl: String) -> Unit
+) {
+    var register by remember { mutableStateOf(false) }
+    var nickname by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var serverUrl by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
+
+    Row(
+        modifier = Modifier.fillMaxSize().background(PageBg).padding(24.dp),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(0.9f)) {
+            Text("好友斗地主", color = Wax, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (register) "创建你的账号" else "欢迎回来",
+                color = Color.White,
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                state.pendingRoom?.let { "登录后将直接加入房间 $it" }
+                    ?: "昵称是唯一账号名，也会显示在牌桌和累计战绩中。",
+                color = if (state.pendingRoom == null) Muted else Wax,
+                fontSize = 15.sp
+            )
+        }
+        Surface(
+            modifier = Modifier.weight(1.1f),
+            color = SurfaceBg,
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { register = false },
+                        modifier = Modifier.weight(1f),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (!register) Coral else Color.Transparent,
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text("登录")
+                    }
+                    OutlinedButton(
+                        onClick = { register = true },
+                        modifier = Modifier.weight(1f),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (register) Coral else Color.Transparent,
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text("注册")
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = nickname,
+                    onValueChange = { nickname = it.take(12) },
+                    label = { Text("昵称 / 账号名") },
+                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                    singleLine = true,
+                    enabled = !state.loading,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it.take(64) },
+                    label = { Text("密码") },
+                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !state.loading,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = { serverUrl = it },
+                    label = { Text("服务器地址") },
+                    singleLine = true,
+                    enabled = !state.loading,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                state.error?.let {
+                    Spacer(Modifier.height(7.dp))
+                    Text(it, color = Color(0xFFF28B78), fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { onSubmit(register, nickname, password, serverUrl) },
+                    enabled = !state.loading,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Coral
+                    )
+                ) {
+                    if (state.loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(if (register) "注册并继续" else "登录并继续", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
 fun CreateRoomScreen(
-    initialNickname: String,
+    nickname: String,
     initialServerUrl: String,
     initialAiCount: Int,
     onBack: () -> Unit,
-    onCreate: (nickname: String, serverUrl: String, aiCount: Int) -> Unit
+    onCreate: (serverUrl: String, aiCount: Int) -> Unit
 ) {
     RoomForm(
         title = "创建房间",
         subtitle = "发起一桌只属于朋友的牌局。",
-        initialNickname = initialNickname,
+        nickname = nickname,
         initialServerUrl = initialServerUrl,
         initialAiCount = initialAiCount,
         roomCode = null,
         onBack = onBack,
-        onSubmit = { nickname, url, _, aiCount -> onCreate(nickname, url, aiCount) }
+        onSubmit = { url, _, aiCount -> onCreate(url, aiCount) }
     )
 }
 
 @Composable
 fun JoinRoomScreen(
-    initialNickname: String,
+    nickname: String,
     initialServerUrl: String,
+    initialRoom: String,
     onBack: () -> Unit,
-    onJoin: (room: String, nickname: String, serverUrl: String) -> Unit
+    onJoin: (room: String, serverUrl: String) -> Unit
 ) {
     RoomForm(
         title = "加入房间",
         subtitle = "输入朋友发来的六位房号。",
-        initialNickname = initialNickname,
+        nickname = nickname,
         initialServerUrl = initialServerUrl,
         initialAiCount = 2,
-        roomCode = "",
+        roomCode = initialRoom,
         onBack = onBack,
-        onSubmit = { nickname, url, room, _ -> onJoin(room, nickname, url) }
+        onSubmit = { url, room, _ -> onJoin(room, url) }
     )
 }
 
@@ -218,16 +376,15 @@ fun JoinRoomScreen(
 private fun RoomForm(
     title: String,
     subtitle: String,
-    initialNickname: String,
+    nickname: String,
     initialServerUrl: String,
     initialAiCount: Int,
     roomCode: String?,
     onBack: () -> Unit,
-    onSubmit: (nickname: String, url: String, room: String, aiCount: Int) -> Unit
+    onSubmit: (url: String, room: String, aiCount: Int) -> Unit
 ) {
-    var nickname by remember { mutableStateOf(initialNickname) }
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
-    var room by remember { mutableStateOf(roomCode.orEmpty()) }
+    var room by remember(roomCode) { mutableStateOf(roomCode.orEmpty()) }
     var aiCount by remember { mutableStateOf(initialAiCount.coerceIn(0, 2)) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -256,14 +413,9 @@ private fun RoomForm(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    OutlinedTextField(
-                        value = nickname,
-                        onValueChange = { nickname = it.take(12) },
-                        label = { Text("昵称") },
-                        leadingIcon = { Icon(Icons.Default.Person, null) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Text("玩家账号", color = Muted, fontSize = 12.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text(nickname, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = serverUrl,
@@ -336,14 +488,11 @@ private fun RoomForm(
                     Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = {
-                            val cleanName = nickname.trim()
-                            if (cleanName.isBlank()) {
-                                error = "请先填写昵称"
-                            } else if (roomCode != null && room.length != 6) {
+                            if (roomCode != null && room.length != 6) {
                                 error = "请输入六位数字房号"
                             } else {
                                 error = null
-                                onSubmit(cleanName, serverUrl, room, aiCount)
+                                onSubmit(serverUrl, room, aiCount)
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(52.dp),

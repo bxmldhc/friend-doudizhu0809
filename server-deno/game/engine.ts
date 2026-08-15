@@ -1,15 +1,21 @@
+import { Card, containsAll, DECK, removeCards, sortCards } from "./cards.ts";
 import {
-  Card,
-  DECK,
-  removeCards,
-  sortCards,
-  containsAll,
-} from "./cards.ts";
-import { classify, ComboType, Pattern, validatePlay as validatePlayCards } from "./hand.ts";
+  classify,
+  ComboType,
+  Pattern,
+  validatePlay as validatePlayCards,
+} from "./hand.ts";
 import { hint } from "./hand.ts";
 
 export type Difficulty = "EASY" | "MEDIUM" | "HARD";
 export type Phase = "BIDDING" | "PLAYING" | "FINISHED";
+export type SeatAction =
+  | "PLAY"
+  | "PASS"
+  | "CALL"
+  | "NOT_CALL"
+  | "ROB"
+  | "NOT_ROB";
 
 export interface GameConfig {
   humanCount: number;
@@ -34,11 +40,13 @@ export interface EngineState {
   bidStartIndex: number;
   bidCandidateIndex: number | null;
   bidCount: number;
+  bidMultiplier: number;
   actedCount: number;
   lastPlay: Card[];
   lastPlayerIndex: number | null;
   /** Cards played by each seat in the current trick. */
   lastPlaysBySeat: Card[][];
+  lastActionsBySeat: (SeatAction | null)[];
   passes: number;
   bottomCards: Card[];
   multiplier: number;
@@ -69,24 +77,31 @@ export class DoudizhuEngine {
     bidStartIndex: 0,
     bidCandidateIndex: null,
     bidCount: 0,
+    bidMultiplier: 1,
     actedCount: 0,
     lastPlay: [],
     lastPlayerIndex: null,
     lastPlaysBySeat: [[], [], []],
+    lastActionsBySeat: [null, null, null],
     passes: 0,
     multiplier: 1,
     winnerIndex: null,
     scoreDelta: [],
   };
 
-  constructor(private config: GameConfig, private rand: () => number = Math.random) {}
+  constructor(
+    private config: GameConfig,
+    private rand: () => number = Math.random,
+  ) {}
 
   startNewGame() {
     const previousScores = this.state.seats.length === 3
       ? this.state.seats.map((s) => s.score)
       : [0, 0, 0];
     const deck = shuffle(DECK, this.rand);
-    const hands = [0, 1, 2].map((i) => sortCards(deck.slice(i * 17, i * 17 + 17)));
+    const hands = [0, 1, 2].map((i) =>
+      sortCards(deck.slice(i * 17, i * 17 + 17))
+    );
     const bottom = sortCards(deck.slice(51, 54));
     const humanNames = ["玩家1", "玩家2", "玩家3"];
     const aiNames = ["小智", "阿强", "老K"];
@@ -109,10 +124,12 @@ export class DoudizhuEngine {
       bidStartIndex,
       bidCandidateIndex: null,
       bidCount: 0,
+      bidMultiplier: 1,
       actedCount: 0,
       lastPlay: [],
       lastPlayerIndex: null,
       lastPlaysBySeat: [[], [], []],
+      lastActionsBySeat: [null, null, null],
       passes: 0,
       multiplier: 1,
       winnerIndex: null,
@@ -125,12 +142,22 @@ export class DoudizhuEngine {
   submitCall(want: boolean) {
     if (this.state.phase !== "BIDDING") throw new Error("当前不在叫地主阶段");
     const seat = this.state.seats[this.state.turnIndex];
-    const candidate = want ? this.state.turnIndex : this.state.bidCandidateIndex;
+    const candidate = want
+      ? this.state.turnIndex
+      : this.state.bidCandidateIndex;
     const bidCount = this.state.bidCount + (want ? 1 : 0);
+    const action: SeatAction = !want
+      ? (this.state.bidCandidateIndex === null ? "NOT_CALL" : "NOT_ROB")
+      : (this.state.bidCandidateIndex === null ? "CALL" : "ROB");
+    const bidMultiplier = action === "ROB"
+      ? this.state.bidMultiplier * 2
+      : this.state.bidMultiplier;
     const acted = this.state.actedCount + 1;
-    const message = !want
+    const message = action === "NOT_CALL"
+      ? `${seat.name} 不叫`
+      : action === "NOT_ROB"
       ? `${seat.name} 不抢`
-      : this.state.bidCandidateIndex === null
+      : action === "CALL"
       ? `${seat.name} 叫地主`
       : `${seat.name} 抢地主`;
 
@@ -140,7 +167,11 @@ export class DoudizhuEngine {
         turnIndex: nextSeat(this.state.turnIndex),
         bidCandidateIndex: candidate,
         bidCount,
+        bidMultiplier,
         actedCount: acted,
+        lastActionsBySeat: this.state.lastActionsBySeat.map((value, index) =>
+          index === this.state.turnIndex ? action : value
+        ),
         message,
       };
       return;
@@ -154,7 +185,18 @@ export class DoudizhuEngine {
       // If only the opening player called, confirm immediately. Any challenge
       // from seat two or three gives the opening player one final choice.
       if (candidate === this.state.bidStartIndex) {
-        this.confirmLandlord(candidate, bidCount);
+        this.state = {
+          ...this.state,
+          bidCandidateIndex: candidate,
+          bidCount,
+          bidMultiplier,
+          actedCount: acted,
+          lastActionsBySeat: this.state.lastActionsBySeat.map((value, index) =>
+            index === this.state.turnIndex ? action : value
+          ),
+          message,
+        };
+        this.confirmLandlord(candidate, bidCount, bidMultiplier);
         return;
       }
       this.state = {
@@ -162,15 +204,23 @@ export class DoudizhuEngine {
         turnIndex: this.state.bidStartIndex,
         bidCandidateIndex: candidate,
         bidCount,
+        bidMultiplier,
         actedCount: acted,
-        message: `轮到 ${this.state.seats[this.state.bidStartIndex].name} 最终抢地主`,
+        lastActionsBySeat: this.state.lastActionsBySeat.map((value, index) =>
+          index === this.state.turnIndex ? action : value
+        ),
+        message: `轮到 ${
+          this.state.seats[this.state.bidStartIndex].name
+        } 最终抢地主`,
       };
       return;
     }
 
-    const landlord = want ? this.state.bidStartIndex : this.state.bidCandidateIndex;
+    const landlord = want
+      ? this.state.bidStartIndex
+      : this.state.bidCandidateIndex;
     if (landlord === null) throw new Error("地主候选状态无效");
-    this.confirmLandlord(landlord, bidCount);
+    this.confirmLandlord(landlord, bidCount, bidMultiplier);
   }
 
   submitPass() {
@@ -178,6 +228,9 @@ export class DoudizhuEngine {
     if (!this.canPass()) throw new Error("本轮不能不出");
     const next = nextSeat(this.state.turnIndex);
     const message = `${this.state.seats[this.state.turnIndex].name} 不出`;
+    const lastActionsBySeat = this.state.lastActionsBySeat.map((value, index) =>
+      index === this.state.turnIndex ? "PASS" : value
+    );
     if (this.state.passes + 1 >= 2) {
       this.state = {
         ...this.state,
@@ -185,6 +238,7 @@ export class DoudizhuEngine {
         passes: 0,
         lastPlay: [],
         lastPlayerIndex: null,
+        lastActionsBySeat,
         message: `轮到 ${this.state.seats[next].name} 出牌`,
       };
     } else {
@@ -192,6 +246,7 @@ export class DoudizhuEngine {
         ...this.state,
         turnIndex: next,
         passes: this.state.passes + 1,
+        lastActionsBySeat,
         message,
       };
     }
@@ -205,19 +260,28 @@ export class DoudizhuEngine {
     const pattern = classify(cards)!;
     const newHand = removeCards(seat.hand, cards);
     const isBomb = pattern.type === "BOMB" || pattern.type === "ROCKET";
-    const multiplier = isBomb ? this.state.multiplier * 2 : this.state.multiplier;
+    const multiplier = isBomb
+      ? this.state.multiplier * 2
+      : this.state.multiplier;
     const playedCards = sortCards(cards);
     const lastPlaysBySeat = this.state.lastPlaysBySeat.map((play, index) =>
       index === this.state.turnIndex ? playedCards : play
+    );
+    const lastActionsBySeat = this.state.lastActionsBySeat.map((value, index) =>
+      index === this.state.turnIndex ? "PLAY" : value
     );
 
     if (newHand.length === 0) {
       this.state = {
         ...this.state,
-        seats: this.state.seats.map((s, i) => (i === this.state.turnIndex ? { ...s, hand: newHand } : s)),
+        seats: this.state.seats.map((
+          s,
+          i,
+        ) => (i === this.state.turnIndex ? { ...s, hand: newHand } : s)),
         lastPlay: playedCards,
         lastPlayerIndex: this.state.turnIndex,
         lastPlaysBySeat,
+        lastActionsBySeat,
         multiplier,
       };
       this.finishGame(this.state.turnIndex, multiplier);
@@ -225,11 +289,15 @@ export class DoudizhuEngine {
     }
     this.state = {
       ...this.state,
-      seats: this.state.seats.map((s, i) => (i === this.state.turnIndex ? { ...s, hand: newHand } : s)),
+      seats: this.state.seats.map((
+        s,
+        i,
+      ) => (i === this.state.turnIndex ? { ...s, hand: newHand } : s)),
       turnIndex: nextSeat(this.state.turnIndex),
       lastPlay: playedCards,
       lastPlayerIndex: this.state.turnIndex,
       lastPlaysBySeat,
+      lastActionsBySeat,
       passes: 0,
       multiplier,
       message: `${seat.name} 出牌`,
@@ -239,7 +307,12 @@ export class DoudizhuEngine {
   validatePlay(cards: Card[]): string | null {
     if (this.state.phase !== "PLAYING") return "现在不能出牌";
     const seat = this.state.seats[this.state.turnIndex];
-    return validatePlayCards(seat.hand, this.state.lastPlay, this.isLeadingTurn(), cards);
+    return validatePlayCards(
+      seat.hand,
+      this.state.lastPlay,
+      this.isLeadingTurn(),
+      cards,
+    );
   }
 
   hintCards(): Card[] | null {
@@ -264,24 +337,35 @@ export class DoudizhuEngine {
   }
 
   canPass(): boolean {
-    return this.state.lastPlay.length > 0 && this.state.lastPlayerIndex !== this.state.turnIndex;
+    return this.state.lastPlay.length > 0 &&
+      this.state.lastPlayerIndex !== this.state.turnIndex;
   }
 
   setSeatHuman(index: number, isHuman: boolean) {
     this.state = {
       ...this.state,
-      seats: this.state.seats.map((s, i) => (i === index ? { ...s, isHuman } : s)),
+      seats: this.state.seats.map((
+        s,
+        i,
+      ) => (i === index ? { ...s, isHuman } : s)),
     };
   }
 
   setSeatAway(index: number, isAway: boolean) {
     this.state = {
       ...this.state,
-      seats: this.state.seats.map((s, i) => (i === index ? { ...s, isAway } : s)),
+      seats: this.state.seats.map((
+        s,
+        i,
+      ) => (i === index ? { ...s, isAway } : s)),
     };
   }
 
-  private confirmLandlord(index: number, bidCount: number) {
+  private confirmLandlord(
+    index: number,
+    bidCount: number,
+    bidMultiplier: number,
+  ) {
     const bottom = this.state.bottomCards;
     const newSeats = this.state.seats.map((s, i) =>
       i === index
@@ -296,19 +380,21 @@ export class DoudizhuEngine {
       landlordIndex: index,
       bidCandidateIndex: null,
       bidCount: Math.max(1, bidCount),
+      bidMultiplier,
       actedCount: 0,
       lastPlay: [],
       lastPlayerIndex: null,
       lastPlaysBySeat: [[], [], []],
+      lastActionsBySeat: [null, null, null],
       passes: 0,
-      multiplier: 1,
+      multiplier: bidMultiplier,
       message: `${newSeats[index].name} 成为地主`,
     };
   }
 
   private finishGame(winnerIndex: number, multiplier: number) {
     const landlordIndex = this.state.landlordIndex!;
-    const base = Math.max(1, this.state.bidCount) * multiplier;
+    const base = Math.max(1, multiplier);
     const landlordWon = winnerIndex === landlordIndex;
     const delta = [0, 1, 2].map((i) => {
       if (i === landlordIndex) return landlordWon ? 2 * base : -2 * base;
@@ -317,7 +403,10 @@ export class DoudizhuEngine {
     this.state = {
       ...this.state,
       phase: "FINISHED",
-      seats: this.state.seats.map((s, i) => ({ ...s, score: s.score + delta[i] })),
+      seats: this.state.seats.map((s, i) => ({
+        ...s,
+        score: s.score + delta[i],
+      })),
       winnerIndex,
       scoreDelta: delta,
       multiplier,

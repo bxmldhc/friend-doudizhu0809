@@ -1,5 +1,5 @@
 import { Card, cardNotation, parseCards } from "./cards.ts";
-import { EngineState, Phase, SeatState } from "./engine.ts";
+import { EngineState, Phase, SeatAction, SeatState } from "./engine.ts";
 import { Difficulty } from "./engine.ts";
 
 export type RemoteAction =
@@ -8,8 +8,21 @@ export type RemoteAction =
   | { kind: "PASS" };
 
 export type ClientMessage =
-  | { type: "CREATE"; name: string; difficulty: Difficulty; aiCount?: number }
-  | { type: "JOIN"; room: string; name: string }
+  | {
+    type: "CREATE";
+    name: string;
+    difficulty: Difficulty;
+    aiCount?: number;
+    playerId?: string;
+    authToken?: string;
+  }
+  | {
+    type: "JOIN";
+    room: string;
+    name: string;
+    playerId?: string;
+    authToken?: string;
+  }
   | { type: "RECONNECT"; room: string; token: string }
   | { type: "START" }
   | { type: "RESTART" }
@@ -44,10 +57,20 @@ export interface RoomRoundSummary {
   scores: RoomRoundScore[];
 }
 
+export interface ServerGameEvent {
+  id: string;
+  type: string;
+  seat: number | null;
+  automatic: boolean;
+  at: number;
+}
+
 export interface RoomStateContext {
   leaderboard: RoomLeaderboardEntry[];
   roundHistory: RoomRoundSummary[];
   readySeats: boolean[];
+  revision?: number;
+  lastEvent?: ServerGameEvent | null;
 }
 
 export function parseClientMessage(raw: string): ClientMessage {
@@ -82,13 +105,19 @@ export function serializeState(
     bidStartIndex: state.bidStartIndex,
     bidCandidateIndex: state.bidCandidateIndex,
     bidCount: state.bidCount,
+    bidMultiplier: state.bidMultiplier,
     actedCount: state.actedCount,
     lastPlay: state.lastPlay.map(cardNotation),
     lastPlayerIndex: state.lastPlayerIndex,
-    lastPlaysBySeat: state.lastPlaysBySeat.map((play) => play.map(cardNotation)),
+    lastPlaysBySeat: state.lastPlaysBySeat.map((play) =>
+      play.map(cardNotation)
+    ),
+    lastActionsBySeat: state.lastActionsBySeat,
     passes: state.passes,
     // Bottom cards stay hidden while bidding and are revealed only after the landlord is confirmed.
-    bottomCards: state.phase === "BIDDING" ? [] : state.bottomCards.map(cardNotation),
+    bottomCards: state.phase === "BIDDING"
+      ? []
+      : state.bottomCards.map(cardNotation),
     multiplier: state.multiplier,
     winnerIndex: state.winnerIndex,
     scoreDelta: state.scoreDelta,
@@ -98,6 +127,8 @@ export function serializeState(
     leaderboard: roomContext?.leaderboard ?? [],
     roundHistory: roomContext?.roundHistory ?? [],
     readySeats: roomContext?.readySeats ?? [true, true, true],
+    revision: roomContext?.revision ?? 0,
+    lastEvent: roomContext?.lastEvent ?? null,
   };
 }
 
@@ -119,6 +150,13 @@ export function deserializeState(obj: Record<string, unknown>): EngineState {
     const play = rawLastPlays[index];
     return Array.isArray(play) ? parseCards(play as string[]) : [];
   });
+  const rawLastActions = Array.isArray(obj.lastActionsBySeat)
+    ? obj.lastActionsBySeat
+    : [];
+  const lastActionsBySeat = [0, 1, 2].map((index) => {
+    const action = rawLastActions[index];
+    return typeof action === "string" ? action as SeatAction : null;
+  });
   return {
     phase: obj.phase as Phase,
     seats,
@@ -129,12 +167,20 @@ export function deserializeState(obj: Record<string, unknown>): EngineState {
       : obj.turnIndex as number,
     bidCandidateIndex: obj.bidCandidateIndex as number | null,
     bidCount: obj.bidCount as number,
+    bidMultiplier: typeof obj.bidMultiplier === "number"
+      ? obj.bidMultiplier
+      : 1,
     actedCount: obj.actedCount as number,
-    lastPlay: parseCards(Array.isArray(obj.lastPlay) ? obj.lastPlay as string[] : []),
+    lastPlay: parseCards(
+      Array.isArray(obj.lastPlay) ? obj.lastPlay as string[] : [],
+    ),
     lastPlayerIndex: obj.lastPlayerIndex as number | null,
     lastPlaysBySeat,
+    lastActionsBySeat,
     passes: obj.passes as number,
-    bottomCards: parseCards(Array.isArray(obj.bottomCards) ? obj.bottomCards as string[] : []),
+    bottomCards: parseCards(
+      Array.isArray(obj.bottomCards) ? obj.bottomCards as string[] : [],
+    ),
     multiplier: obj.multiplier as number,
     winnerIndex: obj.winnerIndex as number | null,
     scoreDelta: obj.scoreDelta as number[],

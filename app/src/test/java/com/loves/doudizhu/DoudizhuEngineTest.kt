@@ -2,6 +2,7 @@ package com.loves.doudizhu
 
 import com.loves.doudizhu.logic.DoudizhuEngine
 import com.loves.doudizhu.logic.Phase
+import com.loves.doudizhu.logic.SeatAction
 import com.loves.doudizhu.model.AiDifficulty
 import com.loves.doudizhu.model.GameConfig
 import com.loves.doudizhu.model.GameMode
@@ -25,11 +26,17 @@ class DoudizhuEngineTest {
         random = Random(42)
     )
 
+    private fun confirmOpeningPlayerAsLandlord(engine: DoudizhuEngine) {
+        engine.submitCall(true)
+        engine.submitCall(false)
+        engine.submitCall(false)
+    }
+
     @Test
     fun biddingCreatesLandlordWithBottomCards() {
         val engine = newEngine()
         engine.startNewGame()
-        repeat(3) { engine.submitCall(true) }
+        confirmOpeningPlayerAsLandlord(engine)
 
         assertEquals(Phase.PLAYING, engine.state.phase)
         val landlord = engine.state.landlordIndex
@@ -45,7 +52,7 @@ class DoudizhuEngineTest {
     fun twoPassesReturnLeadToPreviousPlayer() {
         val engine = newEngine()
         engine.startNewGame()
-        repeat(3) { engine.submitCall(true) }
+        confirmOpeningPlayerAsLandlord(engine)
 
         val landlord = engine.state.landlordIndex!!
         val firstCard = engine.state.seats[landlord].hand.first()
@@ -66,7 +73,7 @@ class DoudizhuEngineTest {
     fun invalidSelectionIsRejectedWithoutChangingState() {
         val engine = newEngine()
         engine.startNewGame()
-        repeat(3) { engine.submitCall(true) }
+        confirmOpeningPlayerAsLandlord(engine)
 
         val hand = engine.state.currentSeat.hand
         val error = engine.validateCurrentPlay(parseCards("3H 4H"))
@@ -78,11 +85,49 @@ class DoudizhuEngineTest {
     fun hintIsAlwaysAvailableForLeadingPlayer() {
         val engine = newEngine()
         engine.startNewGame()
-        repeat(3) { engine.submitCall(true) }
+        confirmOpeningPlayerAsLandlord(engine)
 
         val hint = engine.hintCards()
         assertNotNull(hint)
         assertTrue(hint!!.isNotEmpty())
         assertTrue(engine.state.currentSeat.hand.containsAll(hint))
+    }
+
+    @Test
+    fun eachRobDoublesMultiplierAndActionsAreRecorded() {
+        val engine = newEngine()
+        engine.startNewGame()
+        val openingSeat = engine.state.turnIndex
+
+        engine.submitCall(true)
+        assertEquals(SeatAction.CALL, engine.state.lastActionsBySeat[openingSeat])
+        assertEquals(1, engine.state.bidMultiplier)
+
+        val challenger = engine.state.turnIndex
+        engine.submitCall(true)
+        assertEquals(SeatAction.ROB, engine.state.lastActionsBySeat[challenger])
+        assertEquals(2, engine.state.bidMultiplier)
+
+        engine.submitCall(false)
+        assertEquals(Phase.BIDDING, engine.state.phase)
+        engine.submitCall(true)
+
+        assertEquals(Phase.PLAYING, engine.state.phase)
+        assertEquals(openingSeat, engine.state.landlordIndex)
+        assertEquals(4, engine.state.multiplier)
+    }
+
+    @Test
+    fun passReplacesPreviousPlayWithPassAction() {
+        val engine = newEngine()
+        engine.startNewGame()
+        confirmOpeningPlayerAsLandlord(engine)
+        val landlord = engine.state.landlordIndex!!
+        engine.submitPlay(listOf(engine.state.seats[landlord].hand.first()))
+
+        val passingSeat = engine.state.turnIndex
+        engine.submitPass()
+
+        assertEquals(SeatAction.PASS, engine.state.lastActionsBySeat[passingSeat])
     }
 }

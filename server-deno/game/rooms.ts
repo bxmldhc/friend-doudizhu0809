@@ -1,13 +1,15 @@
-import { DoudizhuEngine, Difficulty, EngineState } from "./engine.ts";
-import { decide, AiAction } from "./ai.ts";
+import { Difficulty, DoudizhuEngine, EngineState } from "./engine.ts";
+import { AiAction, decide } from "./ai.ts";
 import {
   RemoteAction,
   RoomLeaderboardEntry,
   RoomRoundSummary,
   serializeState,
+  ServerGameEvent,
 } from "./protocol.ts";
 import { recordGame } from "./store.ts";
 import { parseCards } from "./cards.ts";
+import { resolveSession } from "./auth.ts";
 
 interface Room {
   code: string;
@@ -27,6 +29,8 @@ interface Room {
   actionDeadlineAt: number | null;
   turnTimer: ReturnType<typeof setTimeout> | null;
   turnVersion: number;
+  revision: number;
+  lastEvent: ServerGameEvent | null;
 }
 
 interface RoomParticipant {
@@ -34,10 +38,12 @@ interface RoomParticipant {
   name: string;
   score: number;
   isAi: boolean;
+  isAuthenticated: boolean;
   joinedAt: number;
 }
 
 const AI_NAMES = ["小智", "阿强", "老K"];
+const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,17 +67,32 @@ export class RoomManager {
     } = {},
   ) {}
 
-  create(ws: WebSocket, name: string, difficulty: Difficulty, requestedAiCount: number): string {
+  create(
+    ws: WebSocket,
+    name: string,
+    difficulty: Difficulty,
+    requestedAiCount: number,
+    requestedPlayerId = "",
+    isAuthenticated = false,
+  ): string {
     const aiCount = Math.max(
       0,
-      Math.min(2, Number.isFinite(requestedAiCount) ? Math.floor(requestedAiCount) : 2)
+      Math.min(
+        2,
+        Number.isFinite(requestedAiCount) ? Math.floor(requestedAiCount) : 2,
+      ),
     );
     let code = "";
     do {
       code = String(Math.floor(100000 + Math.random() * 900000));
     } while (this.rooms.has(code));
     const requiredHumans = 3 - aiCount;
-    const host = this.createParticipant(name, false);
+    const host = this.createParticipant(
+      name,
+      false,
+      requestedPlayerId,
+      isAuthenticated,
+    );
     const participants = new Map<string, RoomParticipant>([[host.id, host]]);
     const playerIds: (string | null)[] = [host.id, null, null];
     const names = [name, "等待加入", "等待加入"];
@@ -79,6 +100,7 @@ export class RoomManager {
       const ai = this.createParticipant(AI_NAMES[seat], true);
       participants.set(ai.id, ai);
       playerIds[seat] = ai.id;
+      names[seat] = ai.name;
     }
     const room: Room = {
       code,
@@ -98,6 +120,8 @@ export class RoomManager {
       actionDeadlineAt: null,
       turnTimer: null,
       turnVersion: 0,
+      revision: 0,
+      lastEvent: null,
     };
     this.rooms.set(code, room);
     this.socketRoom.set(ws, code);
@@ -105,7 +129,13 @@ export class RoomManager {
     return code;
   }
 
-  join(ws: WebSocket, code: string, name: string): { ok: boolean; message?: string } {
+  join(
+    ws: WebSocket,
+    code: string,
+    name: string,
+    requestedPlayerId = "",
+    isAuthenticated = false,
+  ): { ok: boolean; message?: string } {
     const room = this.rooms.get(code);
     if (!room) return { ok: false, message: "房间不存在" };
     if (room.engine && room.engine.state.phase !== "FINISHED") {
@@ -116,9 +146,25 @@ export class RoomManager {
       return { ok: false, message: "当前房间真人人数已满" };
     }
     const requiredHumans = 3 - room.aiCount;
-    const seat = room.sockets.findIndex((s, i) => i < requiredHumans && s === null);
+    const seat = room.sockets.findIndex((s, i) =>
+      i < requiredHumans && s === null
+    );
     if (seat < 0) return { ok: false, message: "房间已满" };
-    const participant = this.createParticipant(name, false);
+    const stablePlayerId = this.normalizePlayerId(requestedPlayerId);
+    if (
+      stablePlayerId &&
+      room.playerIds.some((playerId, index) =>
+        playerId === stablePlayerId && room.sockets[index] !== null
+      )
+    ) {
+      return { ok: false, message: "该玩家已经在房间中" };
+    }
+    const participant = stablePlayerId
+      ? room.participants.get(stablePlayerId) ??
+        this.createParticipant(name, false, stablePlayerId, isAuthenticated)
+      : this.createParticipant(name, false, "", isAuthenticated);
+    participant.name = name;
+    participant.isAuthenticated ||= isAuthenticated;
     room.participants.set(participant.id, participant);
     room.sockets[seat] = ws;
     room.resumeTokens[seat] = crypto.randomUUID();
@@ -135,10 +181,16 @@ export class RoomManager {
     return { ok: true };
   }
 
-  reconnect(ws: WebSocket, code: string, token: string): { ok: boolean; message?: string } {
+  reconnect(
+    ws: WebSocket,
+    code: string,
+    token: string,
+  ): { ok: boolean; message?: string } {
     const room = this.rooms.get(code);
     if (!room) return { ok: false, message: "房间不存在" };
-    const seat = room.resumeTokens.findIndex((value) => value === token && value !== null);
+    const seat = room.resumeTokens.findIndex((value) =>
+      value === token && value !== null
+    );
     if (seat < 0) return { ok: false, message: "恢复凭证无效，无法认领原座位" };
 
     const previousSocket = room.sockets[seat];
@@ -161,7 +213,10 @@ export class RoomManager {
     }
     this.sendRoom(room, seat, ws);
     if (room.engine) {
-      if (room.engine.state.turnIndex === seat && room.engine.state.phase !== "FINISHED") {
+      if (
+        room.engine.state.turnIndex === seat &&
+        room.engine.state.phase !== "FINISHED"
+      ) {
         this.publishState(room);
       } else {
         this.broadcastState(room);
@@ -187,6 +242,7 @@ export class RoomManager {
       });
     }
     room.engine.startNewGame();
+    this.markEvent(room, "ROUND_STARTED", null, false);
     this.syncSeatIdentity(room);
     this.publishState(room);
   }
@@ -203,16 +259,20 @@ export class RoomManager {
       return;
     }
     if (!this.validateStartPlayers(room, ws)) return;
-    if (!room.readySeats.every((ready, seat) => {
-      const participant = room.playerIds[seat]
-        ? room.participants.get(room.playerIds[seat]!)
-        : null;
-      return !participant || participant.isAi || room.sockets[seat] === null || ready;
-    })) {
+    if (
+      !room.readySeats.every((ready, seat) => {
+        const participant = room.playerIds[seat]
+          ? room.participants.get(room.playerIds[seat]!)
+          : null;
+        return !participant || participant.isAi ||
+          room.sockets[seat] === null || ready;
+      })
+    ) {
       send(ws, { type: "ERROR", message: "请等待所有玩家准备" });
       return;
     }
     room.engine.startNewGame();
+    this.markEvent(room, "ROUND_STARTED", null, false);
     this.resetReadySeats(room);
     this.syncSeatIdentity(room);
     this.publishState(room);
@@ -265,7 +325,9 @@ export class RoomManager {
         this.destroyRoom(room);
         return;
       }
-      if (hostChanged || !room.engine || room.engine.state.phase === "FINISHED") {
+      if (
+        hostChanged || !room.engine || room.engine.state.phase === "FINISHED"
+      ) {
         this.broadcastPlayers(room);
       }
       if (room.engine) this.publishState(room);
@@ -276,24 +338,55 @@ export class RoomManager {
     this.disconnect(ws);
   }
 
-  handleMessage(ws: WebSocket, raw: string) {
+  async handleMessage(ws: WebSocket, raw: string) {
     const msg = JSON.parse(raw);
     switch (msg.type) {
-      case "CREATE":
+      case "CREATE": {
+        const identity = await this.resolveMessageIdentity(msg);
+        if (!identity) {
+          send(ws, {
+            type: "ERROR",
+            code: "AUTH_REQUIRED",
+            message: "登录已失效，请重新登录",
+          });
+          break;
+        }
         this.create(
           ws,
-          String(msg.name ?? "玩家1"),
+          identity.name,
           String(msg.difficulty ?? "MEDIUM") as Difficulty,
-          Number(msg.aiCount ?? 2)
+          Number(msg.aiCount ?? 2),
+          identity.playerId,
+          identity.isAuthenticated,
         );
         break;
+      }
       case "JOIN": {
-        const result = this.join(ws, String(msg.room), String(msg.name ?? "玩家"));
+        const identity = await this.resolveMessageIdentity(msg);
+        if (!identity) {
+          send(ws, {
+            type: "ERROR",
+            code: "AUTH_REQUIRED",
+            message: "登录已失效，请重新登录",
+          });
+          break;
+        }
+        const result = this.join(
+          ws,
+          String(msg.room),
+          identity.name,
+          identity.playerId,
+          identity.isAuthenticated,
+        );
         if (!result.ok) send(ws, { type: "ERROR", message: result.message });
         break;
       }
       case "RECONNECT": {
-        const result = this.reconnect(ws, String(msg.room), String(msg.token ?? ""));
+        const result = this.reconnect(
+          ws,
+          String(msg.room),
+          String(msg.token ?? ""),
+        );
         if (!result.ok) {
           send(ws, {
             type: "ERROR",
@@ -322,6 +415,34 @@ export class RoomManager {
         send(ws, { type: "PONG" });
         break;
     }
+  }
+
+  private async resolveMessageIdentity(
+    msg: Record<string, unknown>,
+  ): Promise<
+    {
+      playerId: string;
+      name: string;
+      isAuthenticated: boolean;
+    } | null
+  > {
+    const authToken = String(msg.authToken ?? "").trim();
+    if (authToken) {
+      const account = await resolveSession(authToken);
+      return account
+        ? {
+          playerId: account.accountId,
+          name: account.nickname,
+          isAuthenticated: true,
+        }
+        : null;
+    }
+    // Keep old APKs usable during the migration. New clients always send authToken.
+    return {
+      playerId: String(msg.playerId ?? ""),
+      name: String(msg.name ?? "玩家"),
+      isAuthenticated: false,
+    };
   }
 
   private getRoomBySocket(ws: WebSocket): Room | null {
@@ -362,6 +483,8 @@ export class RoomManager {
               leaderboard: this.buildLeaderboard(room),
               roundHistory: room.roundHistory,
               readySeats: room.readySeats,
+              revision: room.revision,
+              lastEvent: room.lastEvent,
             },
           ),
         });
@@ -374,6 +497,7 @@ export class RoomManager {
     if (!engine) return;
     if (engine.state.turnIndex !== seat) return;
     try {
+      const eventType = this.actionEventType(engine.state, action);
       if (action.kind === "CALL") {
         engine.submitCall(action.want);
       } else if (action.kind === "PLAY") {
@@ -381,10 +505,16 @@ export class RoomManager {
       } else {
         engine.submitPass();
       }
+      this.markEvent(room, eventType, seat, false);
       this.afterEngineChange(room);
     } catch (err) {
       const ws = room.sockets[seat];
-      if (ws) send(ws, { type: "ERROR", message: err instanceof Error ? err.message : String(err) });
+      if (ws) {
+        send(ws, {
+          type: "ERROR",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -405,7 +535,10 @@ export class RoomManager {
       const version = room.turnVersion;
       const timeoutMs = this.options.actionTimeoutMs ?? 20_000;
       room.actionDeadlineAt = Date.now() + timeoutMs;
-      const timer = setTimeout(() => this.handleTurnTimeout(room, version), timeoutMs);
+      const timer = setTimeout(
+        () => this.handleTurnTimeout(room, version),
+        timeoutMs,
+      );
       room.turnTimer = timer;
       Deno.unrefTimer(timer);
     }
@@ -429,15 +562,27 @@ export class RoomManager {
     let timeoutAction = "";
     try {
       if (engine.state.phase === "BIDDING") {
+        const eventType = this.actionEventType(engine.state, {
+          kind: "CALL",
+          want: false,
+        });
+        const seat = engine.state.turnIndex;
         engine.submitCall(false);
+        this.markEvent(room, eventType, seat, true);
         timeoutAction = "默认不抢";
       } else if (engine.canPass()) {
+        const seat = engine.state.turnIndex;
         engine.submitPass();
+        this.markEvent(room, "PASS", seat, true);
         timeoutAction = "默认不出";
       } else {
+        const seat = engine.state.turnIndex;
         const action = decide(engine.state, room.difficulty);
-        if (action.type !== "play") throw new Error("服务器未找到可代出的合法牌");
+        if (action.type !== "play") {
+          throw new Error("服务器未找到可代出的合法牌");
+        }
         engine.submitPlay(action.cards);
+        this.markEvent(room, "PLAY", seat, true);
         timeoutAction = "由服务器代出";
       }
       engine.state = {
@@ -467,12 +612,20 @@ export class RoomManager {
         await sleep(this.options.aiDelayMs ?? 900);
         if (!room.engine || !engine.isAiTurn()) return;
         const action: AiAction = decide(engine.state, room.difficulty);
+        const seat = engine.state.turnIndex;
         if (action.type === "call") {
+          const eventType = this.actionEventType(engine.state, {
+            kind: "CALL",
+            want: action.want,
+          });
           engine.submitCall(action.want);
+          this.markEvent(room, eventType, seat, true);
         } else if (action.type === "play") {
           engine.submitPlay(action.cards);
+          this.markEvent(room, "PLAY", seat, true);
         } else {
           engine.submitPass();
+          this.markEvent(room, "PASS", seat, true);
         }
         this.afterEngineChange(room);
       }
@@ -504,14 +657,55 @@ export class RoomManager {
     };
   }
 
-  private createParticipant(name: string, isAi: boolean): RoomParticipant {
+  private actionEventType(
+    state: EngineState,
+    action: RemoteAction,
+  ): string {
+    if (action.kind === "PLAY") return "PLAY";
+    if (action.kind === "PASS") return "PASS";
+    if (!action.want) {
+      return state.bidCandidateIndex === null ? "NOT_CALL" : "NOT_ROB";
+    }
+    return state.bidCandidateIndex === null ? "CALL" : "ROB";
+  }
+
+  private markEvent(
+    room: Room,
+    type: string,
+    seat: number | null,
+    automatic: boolean,
+  ) {
+    room.revision += 1;
+    room.lastEvent = {
+      id: `${room.code}:${room.engine?.state.gameNumber ?? 0}:${room.revision}`,
+      type,
+      seat,
+      automatic,
+      at: Date.now(),
+    };
+  }
+
+  private createParticipant(
+    name: string,
+    isAi: boolean,
+    requestedId = "",
+    isAuthenticated = false,
+  ): RoomParticipant {
     return {
-      id: crypto.randomUUID(),
+      id: isAi
+        ? crypto.randomUUID()
+        : this.normalizePlayerId(requestedId) ?? crypto.randomUUID(),
       name,
       score: 0,
       isAi,
+      isAuthenticated: !isAi && isAuthenticated,
       joinedAt: Date.now(),
     };
+  }
+
+  private normalizePlayerId(requestedId: string): string | null {
+    const value = requestedId.trim();
+    return PLAYER_ID_PATTERN.test(value) ? value : null;
   }
 
   private pickNewHost(room: Room): number {
@@ -552,13 +746,16 @@ export class RoomManager {
           score: participant.score,
           isAi: participant.isAi,
           seatIndex: seatIndex >= 0 ? seatIndex : null,
-          isAway: seatIndex >= 0 && !participant.isAi && room.sockets[seatIndex] === null,
+          isAway: seatIndex >= 0 && !participant.isAi &&
+            room.sockets[seatIndex] === null,
           isActive: seatIndex >= 0,
         };
       })
-      .sort((left, right) => right.score - left.score ||
+      .sort((left, right) =>
+        right.score - left.score ||
         (room.participants.get(left.playerId)?.joinedAt ?? 0) -
-          (room.participants.get(right.playerId)?.joinedAt ?? 0));
+          (room.participants.get(right.playerId)?.joinedAt ?? 0)
+      );
   }
 
   private recordFinishedRound(room: Room) {
@@ -582,20 +779,25 @@ export class RoomManager {
     });
     room.roundHistory.push({
       gameNumber: state.gameNumber,
-      winnerPlayerId: state.winnerIndex === null ? null : room.playerIds[state.winnerIndex],
-      landlordPlayerId: state.landlordIndex === null ? null : room.playerIds[state.landlordIndex],
+      winnerPlayerId: state.winnerIndex === null
+        ? null
+        : room.playerIds[state.winnerIndex],
+      landlordPlayerId: state.landlordIndex === null
+        ? null
+        : room.playerIds[state.landlordIndex],
       multiplier: state.multiplier,
       scores,
     });
     this.resetReadySeats(room);
 
     if (this.options.persistStats !== false) {
-      void recordGame(
-        state.seats.map((seat) => seat.name),
-        state.winnerIndex ?? 0,
-        state.landlordIndex ?? 0,
-        state.scoreDelta,
-      );
+      void recordGame(scores.map((score) => ({
+        playerId: score.playerId,
+        name: score.name,
+        delta: score.delta,
+        isAi: score.isAi || !room.participants.get(score.playerId)
+          ?.isAuthenticated,
+      }))).catch((error) => console.error("记录玩家累计分失败", error));
     }
   }
 
@@ -609,7 +811,9 @@ export class RoomManager {
       const participant = room.playerIds[seat]
         ? room.participants.get(room.playerIds[seat]!)
         : null;
-      if (!participant || participant.isAi || room.sockets[seat] === null) return true;
+      if (!participant || participant.isAi || room.sockets[seat] === null) {
+        return true;
+      }
       return false;
     });
   }

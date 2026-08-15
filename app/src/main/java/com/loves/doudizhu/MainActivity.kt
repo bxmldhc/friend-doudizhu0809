@@ -1,21 +1,35 @@
 package com.loves.doudizhu
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.loves.doudizhu.ui.DoudizhuApp
+import com.loves.doudizhu.ui.DoudizhuViewModel
 
 class MainActivity : ComponentActivity() {
+    private val gameViewModel by viewModels<DoudizhuViewModel>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         hideSystemBars()
         setContent {
-            DoudizhuApp()
+            DoudizhuApp(
+                viewModel = gameViewModel,
+                initialInviteUri = intent?.dataString
+            )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        gameViewModel.handleInvite(intent.dataString)
     }
 
     override fun onResume() {
