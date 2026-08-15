@@ -1,5 +1,6 @@
 import { RoomManager } from "./game/rooms.ts";
 import { handleApiRequest } from "./api.ts";
+import { handleInviteRequest } from "./invite.ts";
 import { handleUpdateRequest } from "./updates.ts";
 
 const manager = new RoomManager();
@@ -19,6 +20,8 @@ Deno.serve({ port }, async (req) => {
   }
   const updateResponse = await handleUpdateRequest(req);
   if (updateResponse) return updateResponse;
+  const inviteResponse = await handleInviteRequest(req);
+  if (inviteResponse) return inviteResponse;
   const apiResponse = await handleApiRequest(req);
   if (apiResponse) return apiResponse;
   if (url.pathname === "/ws") {

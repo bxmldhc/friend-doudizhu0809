@@ -1,5 +1,6 @@
 import {
   AuthError,
+  getPublicAccount,
   loginAccount,
   logoutSession,
   registerAccount,
@@ -37,6 +38,37 @@ export async function handleApiRequest(req: Request): Promise<Response | null> {
     }
     if (req.method === "GET" && url.pathname === "/api/stats/me") {
       const { account } = await requireAccount(req);
+      const stored = await getStats(account.accountId);
+      return json({
+        ok: true,
+        data: {
+          playerId: account.accountId,
+          name: account.nickname,
+          totalScore: stored?.totalScore ?? 0,
+          games: stored?.games ?? 0,
+          wins: stored?.wins ?? 0,
+        },
+      });
+    }
+    const playerStatsMatch = url.pathname.match(
+      /^\/api\/players\/([^/]+)\/stats$/,
+    );
+    if (req.method === "GET" && playerStatsMatch) {
+      await requireAccount(req);
+      const playerId = decodePathSegment(playerStatsMatch[1]);
+      const account = playerId ? await getPublicAccount(playerId) : null;
+      if (!account) {
+        return json(
+          {
+            ok: false,
+            error: {
+              code: "PLAYER_NOT_FOUND",
+              message: "未找到该玩家账号",
+            },
+          },
+          404,
+        );
+      }
       const stored = await getStats(account.accountId);
       return json({
         ok: true,
@@ -105,6 +137,14 @@ function bearerToken(req: Request): string {
   return authorization.startsWith("Bearer ")
     ? authorization.slice("Bearer ".length).trim()
     : "";
+}
+
+function decodePathSegment(value: string): string {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return "";
+  }
 }
 
 function json(body: unknown, status = 200): Response {

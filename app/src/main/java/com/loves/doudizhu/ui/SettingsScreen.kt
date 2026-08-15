@@ -10,9 +10,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -222,10 +225,17 @@ fun AuthScreen(
     var register by remember { mutableStateOf(false) }
     var nickname by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
     var serverUrl by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
 
     Row(
-        modifier = Modifier.fillMaxSize().background(PageBg).padding(24.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(PageBg)
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         horizontalArrangement = Arrangement.spacedBy(24.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -254,7 +264,11 @@ fun AuthScreen(
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { register = false },
+                        onClick = {
+                            register = false
+                            confirmPassword = ""
+                            localError = null
+                        },
                         modifier = Modifier.weight(1f),
                         colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                             containerColor = if (!register) Coral else Color.Transparent,
@@ -264,7 +278,10 @@ fun AuthScreen(
                         Text("登录")
                     }
                     OutlinedButton(
-                        onClick = { register = true },
+                        onClick = {
+                            register = true
+                            localError = null
+                        },
                         modifier = Modifier.weight(1f),
                         colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                             containerColor = if (register) Coral else Color.Transparent,
@@ -287,7 +304,10 @@ fun AuthScreen(
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it.take(64) },
+                    onValueChange = {
+                        password = it.take(64)
+                        localError = null
+                    },
                     label = { Text("密码") },
                     leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                     visualTransformation = PasswordVisualTransformation(),
@@ -295,6 +315,22 @@ fun AuthScreen(
                     enabled = !state.loading,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (register) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = {
+                            confirmPassword = it.take(64)
+                            localError = null
+                        },
+                        label = { Text("再次输入密码") },
+                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        enabled = !state.loading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = serverUrl,
@@ -304,13 +340,20 @@ fun AuthScreen(
                     enabled = !state.loading,
                     modifier = Modifier.fillMaxWidth()
                 )
-                state.error?.let {
+                (localError ?: state.error)?.let {
                     Spacer(Modifier.height(7.dp))
                     Text(it, color = Color(0xFFF28B78), fontSize = 13.sp)
                 }
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { onSubmit(register, nickname, password, serverUrl) },
+                    onClick = {
+                        if (register && password != confirmPassword) {
+                            localError = "两次输入的密码不一致"
+                        } else {
+                            localError = null
+                            onSubmit(register, nickname, password, serverUrl)
+                        }
+                    },
                     enabled = !state.loading,
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(

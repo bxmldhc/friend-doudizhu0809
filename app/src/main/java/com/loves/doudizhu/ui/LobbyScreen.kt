@@ -39,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import com.loves.doudizhu.R
@@ -69,7 +71,11 @@ fun LobbyScreen(
         while (size < 3) add(LobbySeatData("等待真人", null))
     }.take(3)
     Column(
-        modifier = Modifier.fillMaxSize().background(LobbyBg).padding(horizontal = 14.dp, vertical = 10.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .background(LobbyBg)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(
             modifier = Modifier.height(42.dp),
@@ -126,7 +132,7 @@ fun LobbyScreen(
                                     putExtra(
                                         Intent.EXTRA_TEXT,
                                         "来好友斗地主，房号：${state.roomCode}\n" +
-                                            "点击直接加入：${InviteLink.create(state.roomCode)}"
+                                            "点击直接加入：${InviteLink.createShareUrl(state.roomCode)}"
                                     )
                                 },
                                 "分享房间"

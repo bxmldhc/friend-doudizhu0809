@@ -37,6 +37,7 @@ fun DoudizhuApp(
     val toast by viewModel.toast.collectAsState()
     val inviteConfirmation by viewModel.inviteConfirmation.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
+    val playerProfile by viewModel.playerProfile.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val voicePlayer = remember { GameVoicePlayer(context) }
@@ -49,8 +50,13 @@ fun DoudizhuApp(
         viewModel.audioCues.collect(voicePlayer::play)
     }
 
-    LaunchedEffect((uiState as? GameUiState.Home)?.voiceEnabled) {
-        if ((uiState as? GameUiState.Home)?.voiceEnabled == false) {
+    val voiceEnabled = when (val state = uiState) {
+        is GameUiState.Home -> state.voiceEnabled
+        is GameUiState.Playing -> state.voiceEnabled
+        else -> true
+    }
+    LaunchedEffect(voiceEnabled) {
+        if (!voiceEnabled) {
             voicePlayer.stop()
         }
     }
@@ -113,13 +119,17 @@ fun DoudizhuApp(
                 )
                 is GameUiState.Playing -> GameScreen(
                     state = state,
+                    playerProfile = playerProfile,
                     onCall = viewModel::call,
                     onPlay = viewModel::play,
                     onPass = viewModel::pass,
                     onReady = viewModel::setReady,
                     onRestart = viewModel::restart,
                     onRetry = viewModel::retryConnection,
-                    onExit = viewModel::exitToHome
+                    onExit = viewModel::exitToHome,
+                    onVoiceEnabledChange = viewModel::setVoiceEnabled,
+                    onPlayerProfile = viewModel::openPlayerProfile,
+                    onDismissPlayerProfile = viewModel::dismissPlayerProfile
                 )
                 is GameUiState.History -> HistoryScreen(
                     entries = state.entries,

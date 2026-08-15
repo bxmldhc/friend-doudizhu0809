@@ -25,6 +25,14 @@ data class AccountStats(
     val wins: Int
 )
 
+data class PublicPlayerStats(
+    val playerId: String,
+    val nickname: String,
+    val totalScore: Int,
+    val games: Int,
+    val wins: Int
+)
+
 sealed interface ApiResult<out T> {
     data class Success<T>(val data: T) : ApiResult<T>
     data class Failure(
@@ -109,6 +117,22 @@ class AuthApi(
                 authToken = authToken
             ),
             parser = AuthResponseParser::parseStats
+        )
+    }
+
+    suspend fun playerStats(
+        baseUrl: String,
+        authToken: String,
+        playerId: String
+    ): ApiResult<PublicPlayerStats> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/players/${java.net.URLEncoder.encode(playerId, Charsets.UTF_8.name())}/stats",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parsePublicStats
         )
     }
 
@@ -209,6 +233,18 @@ internal object AuthResponseParser {
         val data = root.optJSONObject("data") ?: root
         val stats = data.optJSONObject("stats") ?: data
         return AccountStats(
+            totalScore = firstInt(stats, "totalScore", "score", "points"),
+            games = firstInt(stats, "games", "gameCount", "totalGames"),
+            wins = firstInt(stats, "wins", "winCount", "totalWins")
+        )
+    }
+
+    fun parsePublicStats(root: JSONObject): PublicPlayerStats {
+        val data = root.optJSONObject("data") ?: root
+        val stats = data.optJSONObject("stats") ?: data
+        return PublicPlayerStats(
+            playerId = firstString(stats, "playerId", "accountId", "id"),
+            nickname = firstString(stats, "name", "nickname", "username"),
             totalScore = firstInt(stats, "totalScore", "score", "points"),
             games = firstInt(stats, "games", "gameCount", "totalGames"),
             wins = firstInt(stats, "wins", "winCount", "totalWins")

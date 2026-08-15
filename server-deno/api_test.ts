@@ -100,6 +100,105 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
       assertNoPasswordMaterial(body);
     });
 
+    await t.step(
+      "authenticated users can read another account's public stats",
+      async () => {
+        const otherNickname = `对手${
+          crypto.randomUUID().replaceAll("-", "").slice(0, 6)
+        }`;
+        const otherNicknameKey = otherNickname.normalize("NFKC")
+          .toLocaleLowerCase("zh-CN");
+        let otherAccountId = "";
+        let otherToken = "";
+        try {
+          const registration = await requestApi("/api/auth/register", {
+            method: "POST",
+            body: { nickname: otherNickname, password },
+          });
+          otherAccountId = asString(
+            asRecord(registration.body.data?.account, "对手账号").accountId,
+            "对手 accountId",
+          );
+          otherToken = asString(registration.body.data?.token, "对手 token");
+          await recordGame([{
+            playerId: otherAccountId,
+            name: otherNickname,
+            delta: -4,
+            isAi: false,
+          }]);
+
+          const { response, body } = await requestApi(
+            `/api/players/${encodeURIComponent(otherAccountId)}/stats`,
+            { token },
+          );
+
+          assertEquals(response.status, 200, "公开战绩状态码");
+          assertEquals(body.ok, true, "公开战绩结果");
+          assertEquals(body.data?.playerId, otherAccountId, "公开 playerId");
+          assertEquals(body.data?.name, otherNickname, "公开昵称");
+          assertEquals(body.data?.totalScore, -4, "公开累计分数");
+          assertEquals(body.data?.games, 1, "公开累计局数");
+          assertEquals(body.data?.wins, 0, "公开胜局数");
+          assertOnlyKeys(
+            body.data,
+            ["playerId", "name", "totalScore", "games", "wins"],
+            "公开战绩字段",
+          );
+          assertNoPasswordMaterial(body);
+
+          await kv.delete(["players", otherAccountId]);
+          const emptyStats = await requestApi(
+            `/api/players/${encodeURIComponent(otherAccountId)}/stats`,
+            { token },
+          );
+          assertEquals(emptyStats.response.status, 200, "无战绩账号状态码");
+          assertEquals(emptyStats.body.data?.totalScore, 0, "无战绩累计分数");
+          assertEquals(emptyStats.body.data?.games, 0, "无战绩局数");
+          assertEquals(emptyStats.body.data?.wins, 0, "无战绩胜局数");
+        } finally {
+          if (otherToken) await kv.delete(["sessions", otherToken]);
+          if (otherAccountId) {
+            await kv.delete(["accounts", otherAccountId]);
+            await kv.delete(["players", otherAccountId]);
+          }
+          await kv.delete(["accountByNickname", otherNicknameKey]);
+        }
+      },
+    );
+
+    await t.step("public player stats require bearer login", async () => {
+      const { response, body } = await requestApi(
+        `/api/players/${encodeURIComponent(accountId)}/stats`,
+      );
+      assertEquals(response.status, 401, "公开战绩未登录状态码");
+      assertEquals(body.error?.code, "AUTH_REQUIRED", "公开战绩未登录错误码");
+    });
+
+    await t.step("unknown and non-account player ids return 404", async () => {
+      const fakePlayerId = `guest-${crypto.randomUUID()}`;
+      await recordGame([{
+        playerId: fakePlayerId,
+        name: "游客",
+        delta: 10,
+        isAi: false,
+      }]);
+      try {
+        const { response, body } = await requestApi(
+          `/api/players/${encodeURIComponent(fakePlayerId)}/stats`,
+          { token },
+        );
+        assertEquals(response.status, 404, "非账号玩家状态码");
+        assertEquals(
+          body.error?.code,
+          "PLAYER_NOT_FOUND",
+          "非账号玩家错误码",
+        );
+        assertNoPasswordMaterial(body);
+      } finally {
+        await kv.delete(["players", fakePlayerId]);
+      }
+    });
+
     await t.step("logout invalidates the current token", async () => {
       const logout = await requestApi("/api/auth/logout", {
         method: "POST",
@@ -180,6 +279,17 @@ function assertNoPasswordMaterial(value: unknown) {
   };
 
   visit(value);
+}
+
+function assertOnlyKeys(
+  value: unknown,
+  expectedKeys: string[],
+  label: string,
+) {
+  const record = asRecord(value, label);
+  const actual = Object.keys(record).sort();
+  const expected = [...expectedKeys].sort();
+  assertEquals(actual.join(","), expected.join(","), label);
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

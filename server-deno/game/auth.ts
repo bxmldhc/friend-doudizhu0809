@@ -164,6 +164,18 @@ export async function resolveSession(
   return account ? toPublicAccount(account) : null;
 }
 
+export async function getPublicAccount(
+  accountId: string,
+): Promise<PublicAccount | null> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) return null;
+  const account = (await kv.get<StoredAccount>([
+    "accounts",
+    normalizedAccountId,
+  ])).value;
+  return account ? toPublicAccount(account) : null;
+}
+
 export async function logoutSession(token: string) {
   const normalizedToken = token.trim();
   if (normalizedToken) {

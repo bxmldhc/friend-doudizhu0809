@@ -25,8 +25,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -77,7 +80,11 @@ fun GameScreen(
     onReady: (Boolean) -> Unit,
     onRestart: () -> Unit,
     onRetry: () -> Unit,
-    onExit: () -> Unit
+    onExit: () -> Unit,
+    onVoiceEnabledChange: (Boolean) -> Unit,
+    onPlayerProfile: (Int) -> Unit,
+    onDismissPlayerProfile: () -> Unit,
+    playerProfile: PlayerProfileUiState
 ) {
     val game = state.state
     val mySeat = game.seats.getOrNull(state.mySeat)
@@ -112,6 +119,7 @@ fun GameScreen(
                 game = game,
                 onRetry = onRetry,
                 onScoreboard = { showScoreboard = !showScoreboard },
+                onVoiceEnabledChange = onVoiceEnabledChange,
                 onExit = { showExitConfirm = true }
             )
             TriangleTable(
@@ -120,6 +128,7 @@ fun GameScreen(
                 myTurn = isMyTurn,
                 canBid = canBid,
                 onCall = onCall,
+                onPlayerProfile = onPlayerProfile,
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
             if (mySeat != null) {
@@ -133,6 +142,7 @@ fun GameScreen(
                     OpponentPanel(
                         seat = mySeat,
                         active = isMyTurn,
+                        onClick = { onPlayerProfile(mySeat.index) },
                         modifier = Modifier.width(132.dp)
                     )
                     if (game.phase == Phase.FINISHED) {
@@ -227,6 +237,12 @@ fun GameScreen(
                 }
             )
         }
+        if (playerProfile !is PlayerProfileUiState.Hidden) {
+            PlayerProfileDialog(
+                state = playerProfile,
+                onDismiss = onDismissPlayerProfile
+            )
+        }
     }
 }
 
@@ -236,42 +252,86 @@ private fun GameTopBar(
     game: EngineState,
     onRetry: () -> Unit,
     onScoreboard: () -> Unit,
+    onVoiceEnabledChange: (Boolean) -> Unit,
     onExit: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().height(46.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(onClick = onExit) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "退出牌局", tint = Color.White)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(54.dp)) {
+        val compact = maxWidth < 820.dp
+        Row(
+            modifier = Modifier.align(Alignment.CenterStart),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onExit, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "退出牌局", tint = Color.White)
+            }
+            Column {
+                if (!compact) {
+                    Text("好友斗地主", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+                Text(
+                    text = if (compact) {
+                        "${state.roomCode} · ${game.gameNumber}局"
+                    } else {
+                        "房号 ${state.roomCode} · 第 ${game.gameNumber} 局"
+                    },
+                    color = Muted,
+                    fontSize = if (compact) 9.sp else 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
         }
-        Column(modifier = Modifier.weight(1f)) {
-            Text("好友斗地主", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-            Text(
-                text = "房号 ${state.roomCode} · 第 ${game.gameNumber} 局",
-                color = Muted,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace
+        if (game.phase == Phase.PLAYING && game.bottomCards.isNotEmpty()) {
+            BottomCards(
+                cards = game.bottomCards,
+                modifier = Modifier.align(Alignment.Center)
             )
         }
-        Text("倍数 ×${game.multiplier}", color = Wax, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(Modifier.width(10.dp))
-        IconButton(onClick = onScoreboard) {
-            Icon(Icons.Default.Leaderboard, "查看场内排行榜", tint = Color.White)
-        }
-        Text(
-            text = when (state.connection) {
-                AppConnectionState.ONLINE -> "已同步"
-                AppConnectionState.CONNECTING -> "连接中"
-                AppConnectionState.RECONNECTING -> "重连中"
-                AppConnectionState.OFFLINE -> "离线"
-            },
-            color = if (state.connection == AppConnectionState.ONLINE) Color(0xFF7ED9A3) else Wax,
-            fontSize = 12.sp
-        )
-        if (state.connection == AppConnectionState.RECONNECTING) {
-            IconButton(onClick = onRetry) {
-                Icon(Icons.Default.Refresh, "重新连接", tint = Color.White)
+        Row(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                if (compact) "×${game.multiplier}" else "倍数 ×${game.multiplier}",
+                color = Wax,
+                fontWeight = FontWeight.Bold,
+                fontSize = if (compact) 12.sp else 13.sp
+            )
+            IconButton(
+                onClick = { onVoiceEnabledChange(!state.voiceEnabled) },
+                modifier = Modifier.size(if (compact) 40.dp else 44.dp)
+            ) {
+                Icon(
+                    if (state.voiceEnabled) Icons.AutoMirrored.Filled.VolumeUp
+                    else Icons.AutoMirrored.Filled.VolumeOff,
+                    if (state.voiceEnabled) "关闭语音" else "开启语音",
+                    tint = if (state.voiceEnabled) Wax else Muted
+                )
+            }
+            IconButton(
+                onClick = onScoreboard,
+                modifier = Modifier.size(if (compact) 40.dp else 44.dp)
+            ) {
+                Icon(Icons.Default.Leaderboard, "查看场内排行榜", tint = Color.White)
+            }
+            if (!compact || state.connection != AppConnectionState.ONLINE) {
+                Text(
+                    text = when (state.connection) {
+                        AppConnectionState.ONLINE -> "已同步"
+                        AppConnectionState.CONNECTING -> "连接中"
+                        AppConnectionState.RECONNECTING -> "重连中"
+                        AppConnectionState.OFFLINE -> "离线"
+                    },
+                    color = if (state.connection == AppConnectionState.ONLINE) Color(0xFF7ED9A3) else Wax,
+                    fontSize = 11.sp
+                )
+            }
+            if (state.connection == AppConnectionState.RECONNECTING) {
+                IconButton(
+                    onClick = onRetry,
+                    modifier = Modifier.size(if (compact) 40.dp else 44.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, "重新连接", tint = Color.White)
+                }
             }
         }
     }
@@ -348,9 +408,14 @@ private fun ScoreboardPanel(
 }
 
 @Composable
-private fun OpponentPanel(seat: SeatState, active: Boolean, modifier: Modifier) {
+private fun OpponentPanel(
+    seat: SeatState,
+    active: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit = {}
+) {
     Surface(
-        modifier = modifier,
+        modifier = modifier.clickable(onClick = onClick),
         color = Panel,
         shape = RoundedCornerShape(9.dp),
         border = BorderStroke(if (active) 2.dp else 1.dp, if (active) Wax else Color.White.copy(alpha = .12f))
@@ -408,6 +473,7 @@ private fun TriangleTable(
     myTurn: Boolean,
     canBid: Boolean,
     onCall: (Boolean) -> Unit,
+    onPlayerProfile: (Int) -> Unit,
     modifier: Modifier
 ) {
     val rightOpponent = game.seats.getOrNull(nextSeat(mySeat))
@@ -426,6 +492,7 @@ private fun TriangleTable(
                     active = game.turnIndex == leftOpponent.index && game.phase != Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
+                    onPlayerProfile = onPlayerProfile,
                     modifier = Modifier.align(Alignment.TopStart)
                 )
             }
@@ -437,6 +504,7 @@ private fun TriangleTable(
                     active = game.turnIndex == rightOpponent.index && game.phase != Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
+                    onPlayerProfile = onPlayerProfile,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
             }
@@ -448,12 +516,6 @@ private fun TriangleTable(
                     active = game.turnIndex == selfSeat.index && game.phase != Phase.FINISHED,
                     width = playWidth,
                     modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-2).dp)
-                )
-            }
-            if (game.phase == Phase.PLAYING && game.bottomCards.isNotEmpty()) {
-                BottomCards(
-                    cards = game.bottomCards,
-                    modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
             TableCenterStatus(
@@ -477,6 +539,7 @@ private fun TablePlayer(
     active: Boolean,
     width: Dp,
     playWidth: Dp,
+    onPlayerProfile: (Int) -> Unit,
     modifier: Modifier
 ) {
     Column(
@@ -486,6 +549,7 @@ private fun TablePlayer(
         OpponentPanel(
             seat = seat,
             active = active,
+            onClick = { onPlayerProfile(seat.index) },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(4.dp))
@@ -648,7 +712,7 @@ private fun ActionCountdown(deadlineAt: Long?, visible: Boolean) {
 @Composable
 private fun BottomCards(cards: List<Card>, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier.padding(top = 4.dp),
+        modifier = modifier,
         color = Color(0x883F5050),
         shape = RoundedCornerShape(8.dp)
     ) {
@@ -665,6 +729,59 @@ private fun BottomCards(cards: List<Card>, modifier: Modifier = Modifier) {
                 step = 17.dp
             )
         }
+    }
+}
+
+@Composable
+private fun PlayerProfileDialog(
+    state: PlayerProfileUiState,
+    onDismiss: () -> Unit
+) {
+    val title = when (state) {
+        PlayerProfileUiState.Hidden -> return
+        is PlayerProfileUiState.Loading -> state.nickname
+        is PlayerProfileUiState.Ready -> state.stats.nickname
+        is PlayerProfileUiState.Unavailable -> state.nickname
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            when (state) {
+                PlayerProfileUiState.Hidden -> Unit
+                is PlayerProfileUiState.Loading -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Text("正在读取历史战绩")
+                }
+                is PlayerProfileUiState.Unavailable -> Text(state.message)
+                is PlayerProfileUiState.Ready -> {
+                    val games = state.stats.games
+                    val winRate = if (games == 0) 0 else state.stats.wins * 100 / games
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ProfileStatRow("历史总得分", state.stats.totalScore.toString())
+                        ProfileStatRow("完成小局", "${state.stats.games}")
+                        ProfileStatRow("胜利小局", "${state.stats.wins}")
+                        ProfileStatRow("小局胜率", "$winRate%")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+@Composable
+private fun ProfileStatRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Muted, modifier = Modifier.weight(1f))
+        Text(value, fontWeight = FontWeight.Bold)
     }
 }
 

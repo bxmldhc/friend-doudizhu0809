@@ -15,4 +15,20 @@ class InviteLinkTest {
     fun rejectsInvalidRoom() {
         assertNull(InviteLink.parse("friendddz://join?room=12345"))
     }
+
+    @Test
+    fun parsesPublicInviteUrl() {
+        assertEquals(
+            "123456",
+            InviteLink.parse("http://114.55.142.169:18080/invite/123456")
+        )
+    }
+
+    @Test
+    fun createsClickablePublicInviteUrl() {
+        assertEquals(
+            "http://114.55.142.169:18080/invite/123456",
+            InviteLink.createShareUrl("123456")
+        )
+    }
 }

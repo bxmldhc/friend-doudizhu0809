@@ -16,6 +16,7 @@ import com.loves.doudizhu.network.AuthSession
 import com.loves.doudizhu.network.ConnectionState
 import com.loves.doudizhu.network.InviteLink
 import com.loves.doudizhu.network.OnlineClient
+import com.loves.doudizhu.network.PublicPlayerStats
 import com.loves.doudizhu.network.RemoteAction
 import com.loves.doudizhu.network.AppUpdateInfo
 import com.loves.doudizhu.network.UpdateApi
@@ -54,6 +55,13 @@ sealed interface UpdateUiState {
     data class Downloading(val info: AppUpdateInfo, val progress: Int) : UpdateUiState
     data class Ready(val info: AppUpdateInfo, val apk: File) : UpdateUiState
     data class Error(val message: String) : UpdateUiState
+}
+
+sealed interface PlayerProfileUiState {
+    data object Hidden : PlayerProfileUiState
+    data class Loading(val nickname: String) : PlayerProfileUiState
+    data class Ready(val stats: PublicPlayerStats) : PlayerProfileUiState
+    data class Unavailable(val nickname: String, val message: String) : PlayerProfileUiState
 }
 
 sealed interface GameUiState {
@@ -105,6 +113,7 @@ sealed interface GameUiState {
         val roomCode: String,
         val players: List<String>,
         val isHost: Boolean,
+        val voiceEnabled: Boolean = true,
         val connection: AppConnectionState = AppConnectionState.ONLINE
     ) : GameUiState
 
@@ -133,6 +142,9 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
+
+    private val _playerProfile = MutableStateFlow<PlayerProfileUiState>(PlayerProfileUiState.Hidden)
+    val playerProfile: StateFlow<PlayerProfileUiState> = _playerProfile.asStateFlow()
 
     private val preferences = application.getSharedPreferences("friend_doudizhu", 0)
     private val authApi = AuthApi()
@@ -330,8 +342,51 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     fun setVoiceEnabled(enabled: Boolean) {
         voiceEnabled = enabled
         preferences.edit().putBoolean("voiceEnabled", enabled).apply()
-        val home = _uiState.value as? GameUiState.Home ?: return
-        _uiState.value = home.copy(voiceEnabled = enabled)
+        when (val current = _uiState.value) {
+            is GameUiState.Home -> _uiState.value = current.copy(voiceEnabled = enabled)
+            is GameUiState.Playing -> _uiState.value = current.copy(voiceEnabled = enabled)
+            else -> Unit
+        }
+    }
+
+    fun openPlayerProfile(seatIndex: Int) {
+        val playing = _uiState.value as? GameUiState.Playing ?: return
+        val seat = playing.state.seats.getOrNull(seatIndex) ?: return
+        val entry = playing.state.leaderboard.firstOrNull { it.seatIndex == seatIndex }
+        if (!seat.isHuman || entry?.isAi == true) {
+            _playerProfile.value = PlayerProfileUiState.Unavailable(
+                nickname = seat.name,
+                message = "服务器 AI 没有长期战绩"
+            )
+            return
+        }
+        val playerId = entry?.playerId.orEmpty()
+        val session = authSession
+        if (playerId.isBlank() || session == null) {
+            _playerProfile.value = PlayerProfileUiState.Unavailable(
+                nickname = seat.name,
+                message = "该玩家暂无可查询的账号战绩"
+            )
+            return
+        }
+        _playerProfile.value = PlayerProfileUiState.Loading(seat.name)
+        viewModelScope.launch {
+            when (val result = authApi.playerStats(httpBaseUrl(lastServerUrl), session.authToken, playerId)) {
+                is ApiResult.Success -> _playerProfile.value = PlayerProfileUiState.Ready(result.data)
+                is ApiResult.Failure -> _playerProfile.value = PlayerProfileUiState.Unavailable(
+                    nickname = seat.name,
+                    message = if (result.statusCode == 404) {
+                        "该玩家还没有可展示的历史战绩"
+                    } else {
+                        result.message
+                    }
+                )
+            }
+        }
+    }
+
+    fun dismissPlayerProfile() {
+        _playerProfile.value = PlayerProfileUiState.Hidden
     }
 
     fun checkForUpdates(manual: Boolean = true) {
@@ -592,7 +647,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     mySeat = mySeat,
                     roomCode = roomCode,
                     players = playerNames,
-                    isHost = isHost
+                    isHost = isHost,
+                    voiceEnabled = voiceEnabled
                 )
             },
             onError = { message ->
