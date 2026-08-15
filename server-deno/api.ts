@@ -1,16 +1,26 @@
 import {
   AuthError,
+  changeOwnPassword,
   countAccounts,
   getPublicAccount,
+  getRegistrationSettings,
   listAccountsForAdmin,
   loginAccount,
+  logoutOtherSessions,
   logoutSession,
   registerAccount,
   resetAccountPassword,
   resolveSession,
+  setAccountDisabled,
+  setRegistrationEnabled,
 } from "./game/auth.ts";
 import type { AdminRoomOverview, AdminRoomSnapshot } from "./game/rooms.ts";
-import { getRecentMatches, getStats } from "./game/store.ts";
+import {
+  getRecentMatches,
+  getStats,
+  listAdminAudit,
+  recordAdminAudit,
+} from "./game/store.ts";
 
 export interface AdminRoomReader {
   getAdminOverview(): AdminRoomOverview;
@@ -51,6 +61,33 @@ export async function handleApiRequest(
       const token = bearerToken(req);
       if (token) await logoutSession(token);
       return json({ ok: true, data: {} });
+    }
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/auth/change-password"
+    ) {
+      const { token } = await requireAccount(req);
+      const body = await readJsonObject(req);
+      const session = await changeOwnPassword(
+        token,
+        String(body.currentPassword ?? ""),
+        String(body.newPassword ?? ""),
+      );
+      return json({
+        ok: true,
+        data: { ...session, sessionsInvalidated: true },
+      });
+    }
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/auth/logout-other-sessions"
+    ) {
+      const { token } = await requireAccount(req);
+      const session = await logoutOtherSessions(token);
+      return json({
+        ok: true,
+        data: { ...session, otherSessionsInvalidated: true },
+      });
     }
     if (req.method === "GET" && url.pathname === "/api/stats/me") {
       const { account } = await requireAccount(req);
@@ -121,17 +158,94 @@ export async function handleApiRequest(
         },
       });
     }
+    if (
+      req.method === "GET" &&
+      url.pathname === "/api/admin/registration"
+    ) {
+      await requireAdmin(req);
+      return json({ ok: true, data: await getRegistrationSettings() });
+    }
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/admin/registration"
+    ) {
+      const { account: actor } = await requireAdmin(req);
+      const body = await readJsonObject(req);
+      if (typeof body.enabled !== "boolean") {
+        throw new AuthError(
+          "enabled 必须是布尔值",
+          "INVALID_REGISTRATION_SETTING",
+        );
+      }
+      const settings = await setRegistrationEnabled(body.enabled);
+      await recordAdminAudit({
+        actorAccountId: actor.accountId,
+        actorNickname: actor.nickname,
+        action: settings.enabled
+          ? "REGISTRATION_ENABLED"
+          : "REGISTRATION_DISABLED",
+      });
+      return json({ ok: true, data: settings });
+    }
+    if (req.method === "GET" && url.pathname === "/api/admin/audit") {
+      await requireAdmin(req);
+      const limit = parseLimit(url.searchParams.get("limit"));
+      return json({
+        ok: true,
+        data: { records: await listAdminAudit(limit), limit },
+      });
+    }
+    const accountStatusMatch = url.pathname.match(
+      /^\/api\/admin\/accounts\/([^/]+)\/status$/,
+    );
+    if (req.method === "POST" && accountStatusMatch) {
+      const { account: actor } = await requireAdmin(req);
+      const accountId = decodePathSegment(accountStatusMatch[1]);
+      const body = await readJsonObject(req);
+      if (typeof body.disabled !== "boolean") {
+        throw new AuthError(
+          "disabled 必须是布尔值",
+          "INVALID_ACCOUNT_STATUS",
+        );
+      }
+      if (accountId === actor.accountId && body.disabled) {
+        throw new AuthError(
+          "不能禁用当前管理员账号",
+          "CANNOT_DISABLE_SELF",
+          409,
+        );
+      }
+      const account = await setAccountDisabled(accountId, body.disabled);
+      await recordAdminAudit({
+        actorAccountId: actor.accountId,
+        actorNickname: actor.nickname,
+        action: account.disabled ? "ACCOUNT_DISABLED" : "ACCOUNT_ENABLED",
+        targetAccountId: account.accountId,
+        targetNickname: account.nickname,
+      });
+      return json({
+        ok: true,
+        data: { account, sessionsInvalidated: account.disabled },
+      });
+    }
     const resetPasswordMatch = url.pathname.match(
       /^\/api\/admin\/accounts\/([^/]+)\/reset-password$/,
     );
     if (req.method === "POST" && resetPasswordMatch) {
-      await requireAdmin(req);
+      const { account: actor } = await requireAdmin(req);
       const accountId = decodePathSegment(resetPasswordMatch[1]);
       const body = await readJsonObject(req);
       const account = await resetAccountPassword(
         accountId,
         String(body.password ?? body.newPassword ?? ""),
       );
+      await recordAdminAudit({
+        actorAccountId: actor.accountId,
+        actorNickname: actor.nickname,
+        action: "PASSWORD_RESET",
+        targetAccountId: account.accountId,
+        targetNickname: account.nickname,
+      });
       return json({
         ok: true,
         data: { account, sessionsInvalidated: true },

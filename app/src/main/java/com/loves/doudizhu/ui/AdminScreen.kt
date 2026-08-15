@@ -21,6 +21,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -30,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -50,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loves.doudizhu.network.AdminAccount
+import com.loves.doudizhu.network.AdminAuditRecord
 import com.loves.doudizhu.network.AdminRoom
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -67,7 +71,9 @@ fun AdminScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onSearch: (String) -> Unit,
-    onResetPassword: (String, String) -> Unit
+    onResetPassword: (String, String) -> Unit,
+    onSetAccountDisabled: (String, Boolean) -> Unit,
+    onSetRegistrationEnabled: (Boolean) -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var query by remember(state.query) { mutableStateOf(state.query) }
@@ -114,6 +120,7 @@ fun AdminScreen(
         ) {
             Tab(selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("账号管理") })
             Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("当前房间") })
+            Tab(selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("操作记录") })
         }
         Spacer(Modifier.height(8.dp))
 
@@ -133,6 +140,33 @@ fun AdminScreen(
                 }
             }
             selectedTab == 0 -> {
+                Surface(
+                    color = AdminPanel,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("允许注册新账号", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (state.registrationEnabled) "当前开放注册" else "当前仅允许已有账号登录",
+                                color = AdminMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                        if (state.updatingRegistration) {
+                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        } else {
+                            Switch(
+                                checked = state.registrationEnabled,
+                                onCheckedChange = onSetRegistrationEnabled
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -164,8 +198,22 @@ fun AdminScreen(
                         AccountRow(
                             account = account,
                             resetting = state.resettingAccountId == account.accountId,
-                            onReset = { resetTarget = account }
+                            updating = state.updatingAccountId == account.accountId,
+                            onReset = { resetTarget = account },
+                            onSetDisabled = { disabled ->
+                                onSetAccountDisabled(account.accountId, disabled)
+                            }
                         )
+                    }
+                }
+            }
+            selectedTab == 1 -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(state.rooms, key = { it.roomCode }) { room ->
+                        RoomRow(room)
                     }
                 }
             }
@@ -174,8 +222,8 @@ fun AdminScreen(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(state.rooms, key = { it.roomCode }) { room ->
-                        RoomRow(room)
+                    items(state.auditRecords, key = { it.auditId }) { record ->
+                        AuditRow(record)
                     }
                 }
             }
@@ -213,7 +261,13 @@ private fun SummaryTile(label: String, value: String, modifier: Modifier) {
 }
 
 @Composable
-private fun AccountRow(account: AdminAccount, resetting: Boolean, onReset: () -> Unit) {
+private fun AccountRow(
+    account: AdminAccount,
+    resetting: Boolean,
+    updating: Boolean,
+    onReset: () -> Unit,
+    onSetDisabled: (Boolean) -> Unit
+) {
     Surface(
         color = AdminPanel,
         shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
@@ -228,6 +282,7 @@ private fun AccountRow(account: AdminAccount, resetting: Boolean, onReset: () ->
                     buildString {
                         append(account.nickname)
                         if (account.isAdmin) append(" · 管理员")
+                        if (account.disabled) append(" · 已禁用")
                     },
                     color = if (account.isAdmin) AdminWax else Color.White,
                     fontWeight = FontWeight.Bold,
@@ -248,7 +303,7 @@ private fun AccountRow(account: AdminAccount, resetting: Boolean, onReset: () ->
             }
             OutlinedButton(
                 onClick = onReset,
-                enabled = !resetting,
+                enabled = !resetting && !updating,
                 modifier = Modifier.height(48.dp)
             ) {
                 if (resetting) {
@@ -259,6 +314,51 @@ private fun AccountRow(account: AdminAccount, resetting: Boolean, onReset: () ->
                     Text("重置密码")
                 }
             }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(
+                onClick = { onSetDisabled(!account.disabled) },
+                enabled = !resetting && !updating && !account.isAdmin,
+                modifier = Modifier.height(48.dp)
+            ) {
+                if (updating) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        if (account.disabled) Icons.Default.CheckCircle else Icons.Default.Block,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (account.disabled) "恢复" else "禁用")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AuditRow(record: AdminAuditRecord) {
+    Surface(
+        color = AdminPanel,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = .08f))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(auditActionText(record.action), color = Color.White, fontWeight = FontWeight.Bold)
+                Text(
+                    buildString {
+                        append(record.actorNickname)
+                        record.targetNickname?.let { append(" → $it") }
+                    },
+                    color = AdminMuted,
+                    fontSize = 11.sp
+                )
+            }
+            Text(formatTime(record.createdAt), color = AdminMuted, fontSize = 11.sp)
         }
     }
 }
@@ -377,4 +477,13 @@ private fun phaseText(phase: String): String = when (phase.uppercase()) {
     "PLAYING" -> "牌局中"
     "FINISHED" -> "本局结束"
     else -> phase.ifBlank { "未知状态" }
+}
+
+private fun auditActionText(action: String): String = when (action.uppercase()) {
+    "ACCOUNT_DISABLED" -> "禁用账号"
+    "ACCOUNT_ENABLED" -> "恢复账号"
+    "PASSWORD_RESET" -> "重置密码"
+    "REGISTRATION_ENABLED" -> "开放注册"
+    "REGISTRATION_DISABLED" -> "关闭注册"
+    else -> action
 }

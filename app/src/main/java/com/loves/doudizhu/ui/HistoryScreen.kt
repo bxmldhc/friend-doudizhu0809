@@ -123,10 +123,13 @@ private fun StatsPanel(
                 }
                 stats != null -> {
                     val winRate = if (stats.games == 0) 0 else stats.wins * 100 / stats.games
+                    val landlordRate = winRate(stats.landlordWins, stats.landlordGames)
+                    val farmerRate = winRate(stats.farmerWins, stats.farmerGames)
                     StatItem("累计得分", stats.totalScore.toString())
                     StatItem("完成小局", stats.games.toString())
-                    StatItem("胜局", stats.wins.toString())
-                    StatItem("胜率", "$winRate%")
+                    StatItem("总胜率", "$winRate%")
+                    StatItem("地主胜率", "$landlordRate%")
+                    StatItem("农民胜率", "$farmerRate%")
                 }
             }
         }
@@ -154,6 +157,10 @@ private fun StatItem(label: String, value: String) {
         Text(value, color = Wax, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         Text(label, color = Muted, fontSize = 11.sp)
     }
+}
+
+private fun winRate(wins: Int, games: Int): Int {
+    return if (games <= 0) 0 else wins * 100 / games
 }
 
 @Composable

@@ -16,6 +16,8 @@ interface Room {
   code: string;
   matchId: string;
   startedAt: number;
+  lastActivityAt: number;
+  noOpenConnectionSince: number | null;
   sockets: (WebSocket | null)[];
   resumeTokens: (string | null)[];
   playerIds: (string | null)[];
@@ -84,6 +86,7 @@ interface RoomOperationResult {
 
 const AI_NAMES = ["小智", "阿强", "老K"];
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
+export const DEFAULT_STALE_ROOM_GRACE_MS = 60_000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -110,6 +113,7 @@ export class RoomManager {
       actionTimeoutMs?: number;
       aiDelayMs?: number;
       persistStats?: boolean;
+      staleRoomGraceMs?: number;
     } = {},
   ) {}
 
@@ -148,10 +152,13 @@ export class RoomManager {
       playerIds[seat] = ai.id;
       names[seat] = ai.name;
     }
+    const createdAt = Date.now();
     const room: Room = {
       code,
       matchId: crypto.randomUUID(),
-      startedAt: Date.now(),
+      startedAt: createdAt,
+      lastActivityAt: createdAt,
+      noOpenConnectionSince: null,
       sockets: [ws, null, null],
       resumeTokens: [crypto.randomUUID(), null, null],
       playerIds,
@@ -235,6 +242,7 @@ export class RoomManager {
     room.playerIds[seat] = participant.id;
     room.names[seat] = name;
     room.readySeats[seat] = false;
+    this.touchRoom(room);
     this.socketRoom.set(ws, code);
     this.sendRoom(room, seat, ws);
     this.broadcastPlayers(room);
@@ -288,6 +296,7 @@ export class RoomManager {
       }
     }
     room.sockets[seat] = ws;
+    this.touchRoom(room);
     this.socketRoom.set(ws, code);
     if (room.engine?.state.phase === "FINISHED") {
       room.readySeats[seat] = false;
@@ -330,6 +339,7 @@ export class RoomManager {
       });
     }
     room.engine.startNewGame();
+    this.touchRoom(room);
     this.markEvent(room, "ROUND_STARTED", null, false);
     this.syncSeatIdentity(room);
     this.publishState(room);
@@ -363,6 +373,7 @@ export class RoomManager {
       return;
     }
     room.engine.startNewGame();
+    this.touchRoom(room);
     this.markEvent(room, "ROUND_STARTED", null, false);
     this.resetReadySeats(room);
     this.syncSeatIdentity(room);
@@ -382,6 +393,7 @@ export class RoomManager {
     const seat = room.sockets.findIndex((socket) => socket === ws);
     if (seat < 0 || !room.playerIds[seat]) return;
     room.readySeats[seat] = ready;
+    this.touchRoom(room);
     this.broadcastState(room);
   }
 
@@ -400,6 +412,32 @@ export class RoomManager {
       return;
     }
     this.applyAction(room, seat, action);
+  }
+
+  cleanupStaleRooms(now = Date.now()): number {
+    const graceMs = Math.max(
+      0,
+      this.options.staleRoomGraceMs ?? DEFAULT_STALE_ROOM_GRACE_MS,
+    );
+    let cleaned = 0;
+    for (const room of this.rooms.values()) {
+      if (this.hasOpenHumanConnection(room)) {
+        room.noOpenConnectionSince = null;
+        continue;
+      }
+      if (room.noOpenConnectionSince === null) {
+        room.noOpenConnectionSince = now;
+        continue;
+      }
+      const staleSince = Math.max(
+        room.lastActivityAt,
+        room.noOpenConnectionSince,
+      );
+      if (now - staleSince < graceMs) continue;
+      this.destroyRoom(room);
+      cleaned += 1;
+    }
+    return cleaned;
   }
 
   getAdminRoomSnapshots(): AdminRoomSnapshot[] {
@@ -491,7 +529,12 @@ export class RoomManager {
           identity.playerId,
           identity.isAuthenticated,
         );
-        this.bindSocketIdentity(ws, msg, identity.playerId, identity.isAuthenticated);
+        this.bindSocketIdentity(
+          ws,
+          msg,
+          identity.playerId,
+          identity.isAuthenticated,
+        );
         break;
       }
       case "JOIN": {
@@ -648,6 +691,18 @@ export class RoomManager {
     return code ? this.rooms.get(code) ?? null : null;
   }
 
+  private touchRoom(room: Room) {
+    room.lastActivityAt = Date.now();
+    room.noOpenConnectionSince = null;
+  }
+
+  private hasOpenHumanConnection(room: Room): boolean {
+    const requiredHumans = 3 - room.aiCount;
+    return room.sockets
+      .slice(0, requiredHumans)
+      .some((socket) => socket?.readyState === WebSocket.OPEN);
+  }
+
   private sendRoom(room: Room, seat: number, ws: WebSocket) {
     send(ws, {
       type: "ROOM",
@@ -704,6 +759,7 @@ export class RoomManager {
       } else {
         engine.submitPass();
       }
+      this.touchRoom(room);
       this.markEvent(room, eventType, seat, false, playPattern);
       this.afterEngineChange(room);
     } catch (err) {
@@ -1070,6 +1126,12 @@ export class RoomManager {
 
   private destroyRoom(room: Room) {
     this.cancelTurnTimer(room);
+    for (const socket of room.sockets) {
+      if (!socket) continue;
+      this.socketRoom.delete(socket);
+      this.socketAuthTokens.delete(socket);
+      this.socketAccountIds.delete(socket);
+    }
     this.rooms.delete(room.code);
   }
 

@@ -100,6 +100,10 @@ class AuthResponseParserTest {
                     "score": 18,
                     "gameCount": 7,
                     "winCount": 4,
+                    "landlordGames": 3,
+                    "landlordWins": 2,
+                    "farmerGames": 4,
+                    "farmerWins": 2,
                     "recentMatches": [{
                       "matchId": "match-1",
                       "roomCode": "123456",
@@ -127,9 +131,37 @@ class AuthResponseParserTest {
         assertEquals(18, stats.totalScore)
         assertEquals(7, stats.games)
         assertEquals(4, stats.wins)
+        assertEquals(3, stats.landlordGames)
+        assertEquals(2, stats.landlordWins)
+        assertEquals(4, stats.farmerGames)
+        assertEquals(2, stats.farmerWins)
         assertEquals(1, stats.recentMatches.size)
         assertEquals("123456", stats.recentMatches.single().roomCode)
         assertEquals(true, stats.recentMatches.single().rounds.single().players[1].isAi)
+    }
+
+    @Test
+    fun missingRoleStatsDefaultToZero() {
+        val stats = AuthResponseParser.parseStats(
+            JSONObject(
+                """
+                {
+                  "ok": true,
+                  "data": {
+                    "playerId": "legacy-account",
+                    "score": 5,
+                    "gameCount": 2,
+                    "winCount": 1
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals(0, stats.landlordGames)
+        assertEquals(0, stats.landlordWins)
+        assertEquals(0, stats.farmerGames)
+        assertEquals(0, stats.farmerWins)
     }
 
     @Test

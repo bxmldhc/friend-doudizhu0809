@@ -6,6 +6,10 @@ export interface PlayerStats {
   totalScore: number;
   games: number;
   wins: number;
+  landlordGames: number;
+  landlordWins: number;
+  farmerGames: number;
+  farmerWins: number;
 }
 
 export interface PlayerScoreDelta {
@@ -39,10 +43,26 @@ export interface MatchContext {
   round: MatchRoundRecord;
 }
 
+export interface AdminAuditRecord {
+  auditId: string;
+  createdAt: number;
+  actorAccountId: string;
+  actorNickname: string;
+  action:
+    | "ACCOUNT_DISABLED"
+    | "ACCOUNT_ENABLED"
+    | "PASSWORD_RESET"
+    | "REGISTRATION_ENABLED"
+    | "REGISTRATION_DISABLED";
+  targetAccountId?: string;
+  targetNickname?: string;
+}
+
 export async function recordGame(
   players: PlayerScoreDelta[],
   match?: MatchContext,
 ) {
+  const factionResult = getFactionResult(match);
   for (const player of players) {
     if (!player.playerId || player.isAi) continue;
     const key = ["players", player.playerId];
@@ -52,19 +72,27 @@ export async function recordGame(
       const [entry, historyEntry] = await kv.getMany<
         [PlayerStats, RecentMatch[]]
       >([key, historyKey]);
-      const current = entry.value ?? {
-        playerId: player.playerId,
-        name: player.name,
-        totalScore: 0,
-        games: 0,
-        wins: 0,
-      };
+      const current = normalizePlayerStats(entry.value, player);
+      const isLandlord = factionResult?.landlordPlayerId === player.playerId;
+      const isFactionWinner = factionResult
+        ? (isLandlord
+          ? factionResult.winnerFaction === "LANDLORD"
+          : factionResult.winnerFaction === "FARMER")
+        : false;
       const next: PlayerStats = {
         playerId: player.playerId,
         name: player.name,
         totalScore: current.totalScore + player.delta,
         games: current.games + 1,
         wins: current.wins + (player.delta > 0 ? 1 : 0),
+        landlordGames: current.landlordGames +
+          (factionResult && isLandlord ? 1 : 0),
+        landlordWins: current.landlordWins +
+          (factionResult && isLandlord && isFactionWinner ? 1 : 0),
+        farmerGames: current.farmerGames +
+          (factionResult && !isLandlord ? 1 : 0),
+        farmerWins: current.farmerWins +
+          (factionResult && !isLandlord && isFactionWinner ? 1 : 0),
       };
       let operation = kv.atomic()
         .check(entry)
@@ -82,12 +110,97 @@ export async function recordGame(
 
 export async function getStats(playerId: string): Promise<PlayerStats | null> {
   const result = await kv.get<PlayerStats>(["players", playerId]);
-  return result.value ?? null;
+  if (!result.value) return null;
+  return normalizePlayerStats(result.value, {
+    playerId: result.value.playerId,
+    name: result.value.name,
+  });
 }
 
-export async function getRecentMatches(playerId: string): Promise<RecentMatch[]> {
+function normalizePlayerStats(
+  stats: PlayerStats | null,
+  player: Pick<PlayerScoreDelta, "playerId" | "name">,
+): PlayerStats {
+  return {
+    playerId: stats?.playerId ?? player.playerId,
+    name: stats?.name ?? player.name,
+    totalScore: stats?.totalScore ?? 0,
+    games: stats?.games ?? 0,
+    wins: stats?.wins ?? 0,
+    landlordGames: stats?.landlordGames ?? 0,
+    landlordWins: stats?.landlordWins ?? 0,
+    farmerGames: stats?.farmerGames ?? 0,
+    farmerWins: stats?.farmerWins ?? 0,
+  };
+}
+
+function getFactionResult(match?: MatchContext): {
+  landlordPlayerId: string;
+  winnerFaction: "LANDLORD" | "FARMER" | null;
+} | null {
+  if (!match) return null;
+  const landlordPlayerId = match.round.landlordPlayerId?.trim();
+  if (
+    !landlordPlayerId ||
+    !match.round.players.some((player) => player.playerId === landlordPlayerId)
+  ) {
+    return null;
+  }
+  const winnerPlayerId = match.round.winnerPlayerId;
+  const winnerIsValid = winnerPlayerId !== null &&
+    match.round.players.some((player) => player.playerId === winnerPlayerId);
+  return {
+    landlordPlayerId,
+    winnerFaction: !winnerIsValid
+      ? null
+      : winnerPlayerId === landlordPlayerId
+      ? "LANDLORD"
+      : "FARMER",
+  };
+}
+
+export async function getRecentMatches(
+  playerId: string,
+): Promise<RecentMatch[]> {
   const result = await kv.get<RecentMatch[]>(["recentMatches", playerId]);
   return result.value ?? [];
+}
+
+export async function recordAdminAudit(
+  record: Omit<AdminAuditRecord, "auditId" | "createdAt">,
+): Promise<AdminAuditRecord> {
+  const stored: AdminAuditRecord = {
+    ...record,
+    auditId: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
+  await kv.set(
+    ["adminAudit", stored.createdAt, stored.auditId],
+    stored,
+  );
+  return stored;
+}
+
+export async function listAdminAudit(
+  requestedLimit = 50,
+): Promise<AdminAuditRecord[]> {
+  const limit = Math.max(
+    1,
+    Math.min(
+      100,
+      Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 50,
+    ),
+  );
+  const records: AdminAuditRecord[] = [];
+  for await (
+    const entry of kv.list<AdminAuditRecord>(
+      { prefix: ["adminAudit"] },
+      { reverse: true, limit },
+    )
+  ) {
+    records.push(entry.value);
+  }
+  return records;
 }
 
 export function mergeRecentMatch(

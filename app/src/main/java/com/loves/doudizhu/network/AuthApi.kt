@@ -45,9 +45,29 @@ data class AdminAccount(
     val createdAt: Long,
     val role: AccountRole,
     val isAdmin: Boolean,
+    val disabled: Boolean = false,
     val totalScore: Int = 0,
     val games: Int = 0,
     val wins: Int = 0
+)
+
+data class RegistrationSettings(
+    val enabled: Boolean
+)
+
+data class AdminAuditRecord(
+    val auditId: String,
+    val createdAt: Long,
+    val actorAccountId: String,
+    val actorNickname: String,
+    val action: String,
+    val targetAccountId: String? = null,
+    val targetNickname: String? = null
+)
+
+data class AdminAuditList(
+    val records: List<AdminAuditRecord>,
+    val limit: Int
 )
 
 data class AdminAccountList(
@@ -78,6 +98,10 @@ data class AccountStats(
     val totalScore: Int,
     val games: Int,
     val wins: Int,
+    val landlordGames: Int = 0,
+    val landlordWins: Int = 0,
+    val farmerGames: Int = 0,
+    val farmerWins: Int = 0,
     val recentMatches: List<RecentMatch> = emptyList()
 )
 
@@ -110,7 +134,11 @@ data class PublicPlayerStats(
     val nickname: String,
     val totalScore: Int,
     val games: Int,
-    val wins: Int
+    val wins: Int,
+    val landlordGames: Int = 0,
+    val landlordWins: Int = 0,
+    val farmerGames: Int = 0,
+    val farmerWins: Int = 0
 )
 
 sealed interface ApiResult<out T> {
@@ -189,6 +217,42 @@ class AuthApi(
                 authToken = authToken
             ),
             parser = { Unit }
+        )
+    }
+
+    suspend fun changePassword(
+        baseUrl: String,
+        authToken: String,
+        currentPassword: String,
+        newPassword: String
+    ): ApiResult<AuthSession> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/auth/change-password",
+                method = "POST",
+                body = JSONObject()
+                    .put("currentPassword", currentPassword)
+                    .put("newPassword", newPassword),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseSession
+        )
+    }
+
+    suspend fun logoutOtherSessions(
+        baseUrl: String,
+        authToken: String
+    ): ApiResult<AuthSession> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/auth/logout-other-sessions",
+                method = "POST",
+                body = JSONObject(),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseSession
         )
     }
 
@@ -288,6 +352,76 @@ class AuthApi(
                 authToken = authToken
             ),
             parser = AuthResponseParser::parseResetPassword
+        )
+    }
+
+    suspend fun adminRegistration(
+        baseUrl: String,
+        authToken: String
+    ): ApiResult<RegistrationSettings> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/admin/registration",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseRegistrationSettings
+        )
+    }
+
+    suspend fun setAdminRegistration(
+        baseUrl: String,
+        authToken: String,
+        enabled: Boolean
+    ): ApiResult<RegistrationSettings> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/admin/registration",
+                method = "POST",
+                body = JSONObject().put("enabled", enabled),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseRegistrationSettings
+        )
+    }
+
+    suspend fun setAdminAccountDisabled(
+        baseUrl: String,
+        authToken: String,
+        accountId: String,
+        disabled: Boolean
+    ): ApiResult<AdminAccount> {
+        val encodedAccountId = java.net.URLEncoder.encode(
+            accountId.trim(),
+            Charsets.UTF_8.name()
+        )
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/admin/accounts/$encodedAccountId/status",
+                method = "POST",
+                body = JSONObject().put("disabled", disabled),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseAdminAccountResult
+        )
+    }
+
+    suspend fun adminAudit(
+        baseUrl: String,
+        authToken: String,
+        limit: Int = 50
+    ): ApiResult<AdminAuditList> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/admin/audit?limit=${limit.coerceIn(1, 100)}",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseAdminAudit
         )
     }
 
@@ -404,6 +538,10 @@ internal object AuthResponseParser {
             totalScore = firstInt(stats, "totalScore", "score", "points"),
             games = firstInt(stats, "games", "gameCount", "totalGames"),
             wins = firstInt(stats, "wins", "winCount", "totalWins"),
+            landlordGames = firstInt(stats, "landlordGames"),
+            landlordWins = firstInt(stats, "landlordWins"),
+            farmerGames = firstInt(stats, "farmerGames"),
+            farmerWins = firstInt(stats, "farmerWins"),
             recentMatches = stats.optJSONArray("recentMatches")?.let { matches ->
                 List(matches.length()) { index ->
                     parseRecentMatch(matches.getJSONObject(index))
@@ -457,7 +595,11 @@ internal object AuthResponseParser {
             nickname = firstString(stats, "name", "nickname", "username"),
             totalScore = firstInt(stats, "totalScore", "score", "points"),
             games = firstInt(stats, "games", "gameCount", "totalGames"),
-            wins = firstInt(stats, "wins", "winCount", "totalWins")
+            wins = firstInt(stats, "wins", "winCount", "totalWins"),
+            landlordGames = firstInt(stats, "landlordGames"),
+            landlordWins = firstInt(stats, "landlordWins"),
+            farmerGames = firstInt(stats, "farmerGames"),
+            farmerWins = firstInt(stats, "farmerWins")
         )
     }
 
@@ -536,6 +678,39 @@ internal object AuthResponseParser {
         return parseAdminAccount(account)
     }
 
+    fun parseAdminAccountResult(root: JSONObject): AdminAccount {
+        val data = root.optJSONObject("data") ?: root
+        return parseAdminAccount(data.optJSONObject("account") ?: data)
+    }
+
+    fun parseRegistrationSettings(root: JSONObject): RegistrationSettings {
+        val data = root.optJSONObject("data") ?: root
+        return RegistrationSettings(enabled = data.optBoolean("enabled", true))
+    }
+
+    fun parseAdminAudit(root: JSONObject): AdminAuditList {
+        val data = root.optJSONObject("data") ?: root
+        val array = data.optJSONArray("records")
+        val records = if (array == null) emptyList() else {
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                AdminAuditRecord(
+                    auditId = item.optString("auditId"),
+                    createdAt = item.optLong("createdAt"),
+                    actorAccountId = item.optString("actorAccountId"),
+                    actorNickname = item.optString("actorNickname"),
+                    action = item.optString("action"),
+                    targetAccountId = item.optString("targetAccountId").ifBlank { null },
+                    targetNickname = item.optString("targetNickname").ifBlank { null }
+                )
+            }
+        }
+        return AdminAuditList(
+            records = records,
+            limit = data.optInt("limit", records.size)
+        )
+    }
+
     fun parseError(root: JSONObject?): Pair<String, String?> {
         if (root == null) return "账号服务器返回了无法识别的数据" to null
         val errorObject = root.optJSONObject("error")
@@ -610,6 +785,7 @@ internal object AuthResponseParser {
             createdAt = firstLong(item, "createdAt", "registeredAt"),
             role = role,
             isAdmin = declaredAdmin == true || role == AccountRole.ADMIN,
+            disabled = firstBoolean(item, "disabled") == true,
             totalScore = firstInt(item, "totalScore", "score", "points"),
             games = firstInt(item, "games", "gameCount", "totalGames"),
             wins = firstInt(item, "wins", "winCount", "totalWins")

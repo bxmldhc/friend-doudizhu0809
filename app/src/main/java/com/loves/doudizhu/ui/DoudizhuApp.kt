@@ -89,7 +89,7 @@ fun DoudizhuApp(
                     onHistory = viewModel::openHistory,
                     onResume = viewModel::resumeSavedRoom,
                     onAdmin = viewModel::openAdmin,
-                    onLogout = viewModel::logout,
+                    onAccount = viewModel::openAccount,
                     onVoiceEnabledChange = viewModel::setVoiceEnabled,
                     onCheckUpdate = { viewModel.checkForUpdates() }
                 )
@@ -108,10 +108,16 @@ fun DoudizhuApp(
                     onJoin = viewModel::joinRoom
                 )
                 is GameUiState.Connecting -> ConnectingScreen(
+                    title = state.title,
                     message = state.message,
-                    canRetry = state.canRetry,
-                    onRetry = viewModel::retryConnection,
-                    onExit = viewModel::exitToHome
+                    primaryLabel = state.primaryLabel,
+                    onPrimary = state.primaryAction?.let { action ->
+                        { viewModel.handleConnectingAction(action) }
+                    },
+                    secondaryLabel = state.secondaryLabel,
+                    onSecondary = state.secondaryAction?.let { action ->
+                        { viewModel.handleConnectingAction(action) }
+                    }
                 )
                 is GameUiState.Lobby -> LobbyScreen(
                     state = state,
@@ -140,12 +146,21 @@ fun DoudizhuApp(
                     onBack = viewModel::backHome,
                     onRetry = viewModel::retryHistory
                 )
+                is GameUiState.Account -> AccountScreen(
+                    state = state,
+                    onBack = viewModel::backHome,
+                    onChangePassword = viewModel::changePassword,
+                    onLogoutOtherSessions = viewModel::logoutOtherSessions,
+                    onLogout = viewModel::logout
+                )
                 is GameUiState.Admin -> AdminScreen(
                     state = state,
                     onBack = viewModel::backHome,
                     onRetry = viewModel::retryAdmin,
                     onSearch = viewModel::searchAdminAccounts,
-                    onResetPassword = viewModel::resetAdminPassword
+                    onResetPassword = viewModel::resetAdminPassword,
+                    onSetAccountDisabled = viewModel::setAdminAccountDisabled,
+                    onSetRegistrationEnabled = viewModel::setRegistrationEnabled
                 )
             }
             SnackbarHost(hostState = snackbarHostState)

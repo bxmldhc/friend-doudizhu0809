@@ -5,6 +5,13 @@ import { handleUpdateRequest } from "./updates.ts";
 
 const manager = new RoomManager();
 const port = Number(Deno.env.get("PORT") ?? 18080);
+const staleRoomCleanupTimer = setInterval(() => {
+  const cleaned = manager.cleanupStaleRooms();
+  if (cleaned > 0) {
+    console.log(`Cleaned ${cleaned} stale room(s)`);
+  }
+}, 30_000);
+Deno.unrefTimer(staleRoomCleanupTimer);
 
 Deno.serve({ port }, async (req) => {
   const url = new URL(req.url);

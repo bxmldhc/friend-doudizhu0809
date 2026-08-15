@@ -199,6 +199,95 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
       }
     });
 
+    await t.step(
+      "users can keep the current device while revoking other sessions",
+      async () => {
+        const otherLogin = await requestApi("/api/auth/login", {
+          method: "POST",
+          body: { nickname, password },
+        });
+        const otherToken = asString(
+          otherLogin.body.data?.token,
+          "其他设备 token",
+        );
+
+        const result = await requestApi(
+          "/api/auth/logout-other-sessions",
+          { method: "POST", token },
+        );
+        assertEquals(result.response.status, 200, "退出其他设备状态码");
+        assertEquals(
+          result.body.data?.otherSessionsInvalidated,
+          true,
+          "退出其他设备结果",
+        );
+        assertEquals(result.body.data?.token, token, "当前设备 token");
+        assertNoPasswordMaterial(result.body);
+
+        const currentMe = await requestApi("/api/auth/me", { token });
+        assertEquals(currentMe.response.status, 200, "当前设备仍登录");
+        const otherMe = await requestApi("/api/auth/me", {
+          token: otherToken,
+        });
+        assertEquals(otherMe.response.status, 401, "其他设备已退出");
+      },
+    );
+
+    await t.step(
+      "users can change their password without leaking credentials",
+      async () => {
+        const wrong = await requestApi("/api/auth/change-password", {
+          method: "POST",
+          token,
+          body: {
+            currentPassword: "WrongPassword!",
+            newPassword: "ChangedPassword!456",
+          },
+        });
+        assertEquals(wrong.response.status, 401, "当前密码错误状态码");
+        assertEquals(
+          wrong.body.error?.code,
+          "CURRENT_PASSWORD_INVALID",
+          "当前密码错误码",
+        );
+
+        const changed = await requestApi("/api/auth/change-password", {
+          method: "POST",
+          token,
+          body: {
+            currentPassword: password,
+            newPassword: "ChangedPassword!456",
+          },
+        });
+        assertEquals(changed.response.status, 200, "修改密码状态码");
+        assertEquals(
+          changed.body.data?.sessionsInvalidated,
+          true,
+          "修改密码会话撤销标记",
+        );
+        const replacementToken = asString(
+          changed.body.data?.token,
+          "修改密码后的 token",
+        );
+        if (replacementToken === token) {
+          throw new Error("修改密码后没有轮换当前 token");
+        }
+        assertNoPasswordMaterial(changed.body);
+
+        const oldMe = await requestApi("/api/auth/me", { token });
+        assertEquals(oldMe.response.status, 401, "旧 token 已失效");
+        token = replacementToken;
+        const newMe = await requestApi("/api/auth/me", { token });
+        assertEquals(newMe.response.status, 200, "新 token 可用");
+
+        const oldLogin = await requestApi("/api/auth/login", {
+          method: "POST",
+          body: { nickname, password },
+        });
+        assertEquals(oldLogin.response.status, 401, "旧密码已失效");
+      },
+    );
+
     await t.step("logout invalidates the current token", async () => {
       const logout = await requestApi("/api/auth/logout", {
         method: "POST",

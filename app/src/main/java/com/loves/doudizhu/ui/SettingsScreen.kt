@@ -19,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ContentCopy
@@ -29,6 +28,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -97,7 +97,7 @@ fun HomeScreen(
     onHistory: () -> Unit,
     onResume: () -> Unit,
     onAdmin: () -> Unit,
-    onLogout: () -> Unit,
+    onAccount: () -> Unit,
     onVoiceEnabledChange: (Boolean) -> Unit,
     onCheckUpdate: () -> Unit
 ) {
@@ -142,17 +142,27 @@ fun HomeScreen(
             }
             state.resumeRoomCode?.let { room ->
                 Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = onResume,
-                    modifier = Modifier.height(50.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = Wax,
-                        contentColor = PageBg
-                    )
-                ) {
-                    Icon(Icons.Default.Restore, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("恢复房间 $room", fontWeight = FontWeight.Bold)
+                Column {
+                    Button(
+                        onClick = onResume,
+                        modifier = Modifier.height(50.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = Wax,
+                            contentColor = PageBg
+                        )
+                    ) {
+                        Icon(Icons.Default.Restore, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("恢复房间 $room", fontWeight = FontWeight.Bold)
+                    }
+                    state.resumeSavedAt?.let { savedAt ->
+                        Spacer(Modifier.height(5.dp))
+                        Text(
+                            text = resumeTimeDescription(savedAt),
+                            color = Muted,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(20.dp))
@@ -239,11 +249,25 @@ fun HomeScreen(
             }
             Text(if (state.voiceEnabled) "语音开" else "语音关", color = Muted, fontSize = 11.sp)
             Spacer(Modifier.height(12.dp))
-            IconButton(onClick = onLogout, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "退出登录", tint = Color.White)
+            IconButton(onClick = onAccount, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.ManageAccounts, contentDescription = "账号管理", tint = Color.White)
             }
-            Text("退出", color = Muted, fontSize = 11.sp)
+            Text("账号", color = Muted, fontSize = 11.sp)
         }
+    }
+}
+
+private fun resumeTimeDescription(savedAt: Long): String {
+    val elapsed = (System.currentTimeMillis() - savedAt).coerceAtLeast(0L)
+    val minute = 60_000L
+    val hour = 60L * minute
+    val day = 24L * hour
+    return when {
+        elapsed < minute -> "刚刚保存的牌局"
+        elapsed < hour -> "${elapsed / minute} 分钟前保存"
+        elapsed < day -> "${elapsed / hour} 小时前保存"
+        elapsed < 7L * day -> "${elapsed / day} 天前保存"
+        else -> "较早保存的牌局"
     }
 }
 

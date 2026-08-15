@@ -266,10 +266,12 @@ private fun LobbySeat(index: Int, name: String, isHuman: Boolean?, isSelf: Boole
 
 @Composable
 fun ConnectingScreen(
+    title: String,
     message: String,
-    canRetry: Boolean,
-    onRetry: () -> Unit,
-    onExit: () -> Unit
+    primaryLabel: String?,
+    onPrimary: (() -> Unit)?,
+    secondaryLabel: String?,
+    onSecondary: (() -> Unit)?
 ) {
     Column(
         modifier = Modifier.fillMaxSize().background(LobbyBg),
@@ -282,25 +284,29 @@ fun ConnectingScreen(
             modifier = Modifier.size(76.dp)
         )
         Spacer(Modifier.height(14.dp))
-        Text(message, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        Text("牌局操作会以服务器返回为准", color = Muted, fontSize = 13.sp)
+        Text(message, color = Muted, fontSize = 13.sp)
         Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (canRetry) {
+            if (primaryLabel != null && onPrimary != null) {
                 Button(
-                    onClick = onRetry,
+                    onClick = onPrimary,
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                         containerColor = Coral
                     )
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("重新连接")
+                    if (primaryLabel == "重新连接") {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(primaryLabel)
                 }
             }
-            OutlinedButton(onClick = onExit) {
-                Text("返回首页")
+            if (secondaryLabel != null && onSecondary != null) {
+                OutlinedButton(onClick = onSecondary) {
+                    Text(secondaryLabel)
+                }
             }
         }
     }

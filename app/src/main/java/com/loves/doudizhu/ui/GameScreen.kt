@@ -760,11 +760,20 @@ private fun PlayerProfileDialog(
                 is PlayerProfileUiState.Ready -> {
                     val games = state.stats.games
                     val winRate = if (games == 0) 0 else state.stats.wins * 100 / games
+                    val landlordRate = profileWinRate(
+                        state.stats.landlordWins,
+                        state.stats.landlordGames
+                    )
+                    val farmerRate = profileWinRate(
+                        state.stats.farmerWins,
+                        state.stats.farmerGames
+                    )
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         ProfileStatRow("历史总得分", state.stats.totalScore.toString())
                         ProfileStatRow("完成小局", "${state.stats.games}")
-                        ProfileStatRow("胜利小局", "${state.stats.wins}")
-                        ProfileStatRow("小局胜率", "$winRate%")
+                        ProfileStatRow("总胜率", "$winRate%")
+                        ProfileStatRow("地主胜率", "$landlordRate%")
+                        ProfileStatRow("农民胜率", "$farmerRate%")
                     }
                 }
             }
@@ -775,6 +784,10 @@ private fun PlayerProfileDialog(
             }
         }
     )
+}
+
+private fun profileWinRate(wins: Int, games: Int): Int {
+    return if (games <= 0) 0 else wins * 100 / games
 }
 
 @Composable

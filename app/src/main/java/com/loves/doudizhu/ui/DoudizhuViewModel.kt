@@ -11,6 +11,7 @@ import com.loves.doudizhu.model.Card
 import com.loves.doudizhu.model.GameConfig
 import com.loves.doudizhu.network.AccountStats
 import com.loves.doudizhu.network.AdminAccount
+import com.loves.doudizhu.network.AdminAuditRecord
 import com.loves.doudizhu.network.AdminOverview
 import com.loves.doudizhu.network.AdminRoom
 import com.loves.doudizhu.network.ApiResult
@@ -41,6 +42,12 @@ enum class AppConnectionState {
     CONNECTING,
     ONLINE,
     RECONNECTING
+}
+
+enum class ConnectingAction {
+    RETRY,
+    RETURN_TO_JOIN,
+    RETURN_HOME
 }
 
 sealed interface UpdateUiState {
@@ -75,6 +82,7 @@ sealed interface GameUiState {
         val connection: AppConnectionState = AppConnectionState.OFFLINE,
         val voiceEnabled: Boolean = true,
         val resumeRoomCode: String? = null,
+        val resumeSavedAt: Long? = null,
         val isAdmin: Boolean = false
     ) : GameUiState
 
@@ -90,7 +98,15 @@ sealed interface GameUiState {
         val initialRoom: String = ""
     ) : GameUiState
 
-    data class Connecting(val message: String, val canRetry: Boolean = false) : GameUiState
+    data class Connecting(
+        val title: String,
+        val message: String,
+        val errorCode: String? = null,
+        val primaryLabel: String? = null,
+        val primaryAction: ConnectingAction? = null,
+        val secondaryLabel: String? = null,
+        val secondaryAction: ConnectingAction? = null
+    ) : GameUiState
 
     data class Lobby(
         val config: GameConfig,
@@ -120,14 +136,26 @@ sealed interface GameUiState {
         val error: String? = null
     ) : GameUiState
 
+    data class Account(
+        val accountId: String,
+        val nickname: String,
+        val isAdmin: Boolean,
+        val loadingAction: String? = null,
+        val error: String? = null
+    ) : GameUiState
+
     data class Admin(
         val overview: AdminOverview? = null,
         val accounts: List<AdminAccount> = emptyList(),
         val rooms: List<AdminRoom> = emptyList(),
+        val auditRecords: List<AdminAuditRecord> = emptyList(),
+        val registrationEnabled: Boolean = true,
         val loading: Boolean = true,
         val error: String? = null,
         val query: String = "",
-        val resettingAccountId: String? = null
+        val resettingAccountId: String? = null,
+        val updatingAccountId: String? = null,
+        val updatingRegistration: Boolean = false
     ) : GameUiState
 }
 
@@ -202,7 +230,10 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     continueAfterAuthentication()
                 }
                 is ApiResult.Failure -> {
-                    if (result.isUnauthorized) {
+                    if (result.code.equals("ACCOUNT_DISABLED", ignoreCase = true)) {
+                        clearAuthSession()
+                        showAuth("当前账号已被停用，请联系管理员")
+                    } else if (result.isUnauthorized) {
                         clearAuthSession()
                         showAuth("登录已过期，请重新登录")
                     } else {
@@ -260,10 +291,18 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     continueAfterAuthentication()
                 }
                 is ApiResult.Failure -> {
+                    val message = when (result.code?.uppercase()) {
+                        "ACCOUNT_DISABLED" -> "当前账号已被停用，请联系管理员"
+                        "REGISTRATION_DISABLED" -> "管理员暂时关闭了新账号注册，请登录已有账号"
+                        else -> result.message
+                    }
+                    if (result.code.equals("ACCOUNT_DISABLED", ignoreCase = true)) {
+                        clearAuthSession()
+                    }
                     _uiState.value = GameUiState.Auth(
                         serverUrl = cleanUrl,
                         pendingRoom = pendingInviteRoom,
-                        error = result.message
+                        error = message
                     )
                 }
             }
@@ -331,6 +370,79 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         loadHistory()
     }
 
+    fun openAccount() {
+        val session = authSession ?: return showAuth()
+        _uiState.value = GameUiState.Account(
+            accountId = session.accountId,
+            nickname = session.nickname,
+            isAdmin = session.isAdmin
+        )
+    }
+
+    fun changePassword(currentPassword: String, newPassword: String) {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Account ?: return
+        if (currentPassword.length !in 6..64 || newPassword.length !in 6..64) {
+            _uiState.value = current.copy(error = "密码需要 6 到 64 个字符")
+            return
+        }
+        _uiState.value = current.copy(loadingAction = "password", error = null)
+        viewModelScope.launch {
+            when (
+                val result = authApi.changePassword(
+                    httpBaseUrl(lastServerUrl),
+                    session.authToken,
+                    currentPassword,
+                    newPassword
+                )
+            ) {
+                is ApiResult.Success -> {
+                    saveAuthSession(result.data)
+                    val state = _uiState.value as? GameUiState.Account ?: return@launch
+                    _uiState.value = state.copy(loadingAction = null)
+                    _toast.value = "密码已修改，其他设备已退出"
+                }
+                is ApiResult.Failure -> {
+                    if (result.isUnauthorized && result.code != "CURRENT_PASSWORD_INVALID") {
+                        handleAuthenticationExpired()
+                    } else {
+                        val state = _uiState.value as? GameUiState.Account ?: return@launch
+                        _uiState.value = state.copy(loadingAction = null, error = result.message)
+                    }
+                }
+            }
+        }
+    }
+
+    fun logoutOtherSessions() {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Account ?: return
+        _uiState.value = current.copy(loadingAction = "sessions", error = null)
+        viewModelScope.launch {
+            when (
+                val result = authApi.logoutOtherSessions(
+                    httpBaseUrl(lastServerUrl),
+                    session.authToken
+                )
+            ) {
+                is ApiResult.Success -> {
+                    saveAuthSession(result.data)
+                    val state = _uiState.value as? GameUiState.Account ?: return@launch
+                    _uiState.value = state.copy(loadingAction = null)
+                    _toast.value = "其他设备已退出"
+                }
+                is ApiResult.Failure -> {
+                    if (result.isUnauthorized) {
+                        handleAuthenticationExpired()
+                    } else {
+                        val state = _uiState.value as? GameUiState.Account ?: return@launch
+                        _uiState.value = state.copy(loadingAction = null, error = result.message)
+                    }
+                }
+            }
+        }
+    }
+
     fun openAdmin() {
         if (authSession?.isAdmin != true) {
             _toast.value = "当前账号没有管理权限"
@@ -389,6 +501,83 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setAdminAccountDisabled(accountId: String, disabled: Boolean) {
+        val session = authSession ?: return showAuth()
+        if (!session.isAdmin) return
+        val current = _uiState.value as? GameUiState.Admin ?: return
+        _uiState.value = current.copy(
+            updatingAccountId = accountId,
+            error = null
+        )
+        viewModelScope.launch {
+            when (
+                val result = authApi.setAdminAccountDisabled(
+                    httpBaseUrl(lastServerUrl),
+                    session.authToken,
+                    accountId,
+                    disabled
+                )
+            ) {
+                is ApiResult.Success -> {
+                    _toast.value = if (result.data.disabled) {
+                        "已禁用 ${result.data.nickname}"
+                    } else {
+                        "已恢复 ${result.data.nickname}"
+                    }
+                    loadAdmin((_uiState.value as? GameUiState.Admin)?.query.orEmpty())
+                }
+                is ApiResult.Failure -> {
+                    if (result.isUnauthorized) {
+                        handleAuthenticationExpired()
+                    } else {
+                        val state = _uiState.value as? GameUiState.Admin ?: return@launch
+                        _uiState.value = state.copy(
+                            updatingAccountId = null,
+                            error = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun setRegistrationEnabled(enabled: Boolean) {
+        val session = authSession ?: return showAuth()
+        if (!session.isAdmin) return
+        val current = _uiState.value as? GameUiState.Admin ?: return
+        _uiState.value = current.copy(updatingRegistration = true, error = null)
+        viewModelScope.launch {
+            when (
+                val result = authApi.setAdminRegistration(
+                    httpBaseUrl(lastServerUrl),
+                    session.authToken,
+                    enabled
+                )
+            ) {
+                is ApiResult.Success -> {
+                    val state = _uiState.value as? GameUiState.Admin ?: return@launch
+                    _uiState.value = state.copy(
+                        registrationEnabled = result.data.enabled,
+                        updatingRegistration = false
+                    )
+                    _toast.value = if (result.data.enabled) "新账号注册已开放" else "新账号注册已关闭"
+                    loadAdmin(state.query)
+                }
+                is ApiResult.Failure -> {
+                    if (result.isUnauthorized) {
+                        handleAuthenticationExpired()
+                    } else {
+                        val state = _uiState.value as? GameUiState.Admin ?: return@launch
+                        _uiState.value = state.copy(
+                            updatingRegistration = false,
+                            error = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private fun loadAdmin(query: String = "") {
         val session = authSession ?: return showAuth()
         if (!session.isAdmin) return backHome()
@@ -400,7 +589,12 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 query
             )
             val rooms = authApi.adminRooms(httpBaseUrl(lastServerUrl), session.authToken)
-            val failure = listOf(overview, accounts, rooms)
+            val registration = authApi.adminRegistration(
+                httpBaseUrl(lastServerUrl),
+                session.authToken
+            )
+            val audit = authApi.adminAudit(httpBaseUrl(lastServerUrl), session.authToken)
+            val failure = listOf(overview, accounts, rooms, registration, audit)
                 .filterIsInstance<ApiResult.Failure>()
                 .firstOrNull()
             if (failure != null) {
@@ -411,6 +605,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     _uiState.value = current.copy(
                         loading = false,
                         resettingAccountId = null,
+                        updatingAccountId = null,
+                        updatingRegistration = false,
                         error = failure.message
                     )
                 }
@@ -421,8 +617,12 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 overview = (overview as ApiResult.Success).data,
                 accounts = (accounts as ApiResult.Success).data.accounts,
                 rooms = (rooms as ApiResult.Success).data.rooms,
+                registrationEnabled = (registration as ApiResult.Success).data.enabled,
+                auditRecords = (audit as ApiResult.Success).data.records,
                 loading = false,
                 resettingAccountId = null,
+                updatingAccountId = null,
+                updatingRegistration = false,
                 error = null,
                 query = query
             )
@@ -626,6 +826,14 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun handleConnectingAction(action: ConnectingAction) {
+        when (action) {
+            ConnectingAction.RETRY -> retryConnection()
+            ConnectingAction.RETURN_TO_JOIN -> returnToJoinRoom()
+            ConnectingAction.RETURN_HOME -> exitToHome()
+        }
+    }
+
     fun exitToHome() {
         disconnectPreservingResume()
         _uiState.value = homeState()
@@ -704,7 +912,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     private fun homeState(): GameUiState.Home {
         val session = authSession
-        val resumableRoom = session?.let { loadResumeRecordFor(it.accountId)?.roomCode }
+        val resumeRecord = session?.let { loadResumeRecordFor(it.accountId) }
         return if (session == null) {
             GameUiState.Home("", lastServerUrl, connection, voiceEnabled)
         } else {
@@ -713,7 +921,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 serverUrl = lastServerUrl,
                 connection = connection,
                 voiceEnabled = voiceEnabled,
-                resumeRoomCode = resumableRoom,
+                resumeRoomCode = resumeRecord?.roomCode,
+                resumeSavedAt = resumeRecord?.savedAt?.takeIf { it > 0L },
                 isAdmin = authVerifiedThisProcess && session.isAdmin
             )
         }
@@ -738,8 +947,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         lastRequestedRoom = room
         connection = AppConnectionState.CONNECTING
         _uiState.value = GameUiState.Connecting(
-            message = if (room == null) "正在创建房间" else "正在加入房间",
-            canRetry = false
+            title = if (room == null) "正在创建房间" else "正在加入房间",
+            message = "正在与服务器同步，请稍候"
         )
         onlineClient?.close()
         var nextClient: OnlineClient? = null
@@ -848,8 +1057,13 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                         state == ConnectionState.FAILED
                     ) {
                         _uiState.value = current.copy(
-                            message = "连接失败，请检查服务器地址后重试",
-                            canRetry = true
+                            title = "暂时无法连接",
+                            message = "请检查网络或服务器地址后重新连接",
+                            errorCode = "CONNECTION_FAILED",
+                            primaryLabel = "重新连接",
+                            primaryAction = ConnectingAction.RETRY,
+                            secondaryLabel = "返回首页",
+                            secondaryAction = ConnectingAction.RETURN_HOME
                         )
                     }
                     if (
@@ -928,20 +1142,105 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private fun handleServerError(error: ServerError) {
         when (error.code?.uppercase()) {
             "AUTH_REQUIRED", "UNAUTHORIZED", "INVALID_TOKEN" -> handleAuthenticationExpired()
-            "ROOM_NOT_FOUND", "RESUME_DENIED" -> {
-                reconnectJob?.cancel()
-                allowAutomaticReconnect = false
+            "ACCOUNT_DISABLED" -> {
+                stopConnection()
+                clearAuthSession()
+                showAuth("当前账号已被停用，请联系管理员")
+            }
+            "REGISTRATION_DISABLED" -> {
+                stopConnection()
+                showAuth("管理员暂时关闭了新账号注册，请登录已有账号")
+            }
+            "ROOM_NOT_FOUND" -> {
                 clearResumeRecord()
                 resumeToken = null
                 roomCode = ""
-                onlineClient?.close()
-                onlineClient = null
-                connection = AppConnectionState.OFFLINE
-                _toast.value = error.message
-                _uiState.value = homeState()
+                stopConnection()
+                showConnectingIssue(
+                    title = "没有找到这个房间",
+                    message = "房间可能已经结束，请确认房号后重新输入",
+                    code = "ROOM_NOT_FOUND",
+                    primaryLabel = "重新输入房号",
+                    primaryAction = ConnectingAction.RETURN_TO_JOIN
+                )
             }
+            "RESUME_DENIED" -> {
+                clearResumeRecord()
+                resumeToken = null
+                roomCode = ""
+                stopConnection()
+                showConnectingIssue(
+                    title = "无法恢复上次牌局",
+                    message = "原座位已经失效，可以返回首页重新加入房间",
+                    code = "RESUME_DENIED",
+                    primaryLabel = "返回首页",
+                    primaryAction = ConnectingAction.RETURN_HOME,
+                    includeSecondaryHome = false
+                )
+            }
+            "ROOM_FULL" -> {
+                stopConnection()
+                showConnectingIssue(
+                    title = "房间人数已满",
+                    message = "这个房间暂时没有空位，可以检查房号或稍后再试",
+                    code = "ROOM_FULL",
+                    primaryLabel = "重新输入房号",
+                    primaryAction = ConnectingAction.RETURN_TO_JOIN
+                )
+            }
+            "GAME_ALREADY_STARTED" -> {
+                stopConnection()
+                showConnectingIssue(
+                    title = "牌局已经开始",
+                    message = "当前不能以新玩家身份加入，可以检查房号或等待下一场",
+                    code = "GAME_ALREADY_STARTED",
+                    primaryLabel = "重新输入房号",
+                    primaryAction = ConnectingAction.RETURN_TO_JOIN
+                )
+            }
+            "CONNECTION_FAILED" -> Unit
             else -> _toast.value = error.message
         }
+    }
+
+    private fun showConnectingIssue(
+        title: String,
+        message: String,
+        code: String,
+        primaryLabel: String,
+        primaryAction: ConnectingAction,
+        includeSecondaryHome: Boolean = true
+    ) {
+        _uiState.value = GameUiState.Connecting(
+            title = title,
+            message = message,
+            errorCode = code,
+            primaryLabel = primaryLabel,
+            primaryAction = primaryAction,
+            secondaryLabel = if (includeSecondaryHome) "返回首页" else null,
+            secondaryAction = if (includeSecondaryHome) ConnectingAction.RETURN_HOME else null
+        )
+    }
+
+    private fun returnToJoinRoom() {
+        val session = authSession ?: return showAuth()
+        val room = lastRequestedRoom.orEmpty()
+        stopConnection()
+        roomCode = ""
+        resumeToken = null
+        _uiState.value = GameUiState.JoinRoom(
+            nickname = session.nickname,
+            serverUrl = lastServerUrl,
+            initialRoom = room
+        )
+    }
+
+    private fun stopConnection() {
+        reconnectJob?.cancel()
+        allowAutomaticReconnect = false
+        onlineClient?.close()
+        onlineClient = null
+        connection = AppConnectionState.OFFLINE
     }
 
     private fun handleAuthenticationExpired() {

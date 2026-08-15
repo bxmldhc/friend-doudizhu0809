@@ -88,6 +88,8 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
     nicknameKey: string;
     tokens: string[];
   }> = [];
+  const auditKeys: Deno.KvKey[] = [];
+  const registrationEntry = await kv.get(["settings", "registration"]);
 
   try {
     const admin = await requestApi("/api/auth/register", {
@@ -201,7 +203,107 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
       const listed = asRecord(items[0], "账号列表项");
       assertEquals(listed.accountId, userId, "账号列表 accountId");
       assertEquals(listed.role, "USER", "账号列表 role");
+      assertEquals(listed.disabled, false, "账号列表禁用状态");
       assertNoSecrets(accounts.body);
+    });
+
+    await t.step("注册开关仅管理员可改且关闭后拒绝注册", async () => {
+      const forbidden = await requestApi("/api/admin/registration", {
+        token: userToken,
+      });
+      assertEquals(forbidden.response.status, 403, "普通账号读取注册开关");
+
+      const disabled = await requestApi("/api/admin/registration", {
+        method: "POST",
+        token: adminToken,
+        body: { enabled: false },
+      });
+      assertEquals(disabled.response.status, 200, "关闭注册状态码");
+      assertEquals(disabled.body.data?.enabled, false, "关闭注册结果");
+
+      const rejected = await requestApi("/api/auth/register", {
+        method: "POST",
+        body: {
+          nickname: `new${suffix}`,
+          password: "NewUser123!",
+        },
+      });
+      assertEquals(rejected.response.status, 403, "注册关闭状态码");
+      assertEquals(
+        rejected.body.error?.code,
+        "REGISTRATION_DISABLED",
+        "注册关闭错误码",
+      );
+
+      const enabled = await requestApi("/api/admin/registration", {
+        method: "POST",
+        token: adminToken,
+        body: { enabled: true },
+      });
+      assertEquals(enabled.body.data?.enabled, true, "恢复注册结果");
+    });
+
+    await t.step("管理员可禁用恢复账号但不能禁用自己", async () => {
+      const selfDisable = await requestApi(
+        `/api/admin/accounts/${encodeURIComponent(adminId)}/status`,
+        {
+          method: "POST",
+          token: adminToken,
+          body: { disabled: true },
+        },
+      );
+      assertEquals(selfDisable.response.status, 409, "管理员自禁用状态码");
+      assertEquals(
+        selfDisable.body.error?.code,
+        "CANNOT_DISABLE_SELF",
+        "管理员自禁用错误码",
+      );
+
+      const disabled = await requestApi(
+        `/api/admin/accounts/${encodeURIComponent(userId)}/status`,
+        {
+          method: "POST",
+          token: adminToken,
+          body: { disabled: true },
+        },
+      );
+      assertEquals(disabled.response.status, 200, "禁用账号状态码");
+      assertEquals(
+        asRecord(disabled.body.data?.account, "禁用账号").disabled,
+        true,
+        "禁用账号结果",
+      );
+      if (await resolveSession(userToken)) {
+        throw new Error("管理员禁用账号后旧 token 仍然有效");
+      }
+      const blockedLogin = await requestApi("/api/auth/login", {
+        method: "POST",
+        body: { nickname: userNickname, password: userPassword },
+      });
+      assertEquals(blockedLogin.response.status, 403, "禁用账号登录状态码");
+      assertEquals(
+        blockedLogin.body.error?.code,
+        "ACCOUNT_DISABLED",
+        "禁用账号登录错误码",
+      );
+
+      const enabled = await requestApi(
+        `/api/admin/accounts/${encodeURIComponent(userId)}/status`,
+        {
+          method: "POST",
+          token: adminToken,
+          body: { disabled: false },
+        },
+      );
+      assertEquals(enabled.response.status, 200, "恢复账号状态码");
+      const relogin = await requestApi("/api/auth/login", {
+        method: "POST",
+        body: { nickname: userNickname, password: userPassword },
+      });
+      assertEquals(relogin.response.status, 200, "恢复账号登录状态码");
+      cleanup[1].tokens.push(
+        asString(relogin.body.data?.token, "恢复后的 token"),
+      );
     });
 
     await t.step("密码重置校验密码且使目标全部旧会话失效", async () => {
@@ -277,7 +379,55 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
         asString(newLogin.body.data?.token, "重置后 token"),
       );
     });
+
+    await t.step("审计接口记录管理动作且不包含密码和 token", async () => {
+      const audit = await requestApi("/api/admin/audit?limit=20", {
+        token: adminToken,
+      });
+      assertEquals(audit.response.status, 200, "审计接口状态码");
+      const records = audit.body.data?.records;
+      if (!Array.isArray(records)) throw new Error("审计记录不是数组");
+      const actions = new Set(
+        records.map((record) => asRecord(record, "审计项").action),
+      );
+      for (
+        const expected of [
+          "REGISTRATION_DISABLED",
+          "REGISTRATION_ENABLED",
+          "ACCOUNT_DISABLED",
+          "ACCOUNT_ENABLED",
+          "PASSWORD_RESET",
+        ]
+      ) {
+        if (!actions.has(expected)) {
+          throw new Error(`审计记录缺少动作 ${expected}`);
+        }
+      }
+      assertNoSecrets(audit.body);
+      const serialized = JSON.stringify(audit.body).toLocaleLowerCase();
+      if (
+        serialized.includes(adminToken.toLocaleLowerCase()) ||
+        serialized.includes(newPassword.toLocaleLowerCase())
+      ) {
+        throw new Error("审计接口泄露 token 或密码");
+      }
+    });
   } finally {
+    if (registrationEntry.value === null) {
+      await kv.delete(["settings", "registration"]);
+    } else {
+      await kv.set(["settings", "registration"], registrationEntry.value);
+    }
+    for await (
+      const entry of kv.list<{ actorAccountId?: string }>({
+        prefix: ["adminAudit"],
+      })
+    ) {
+      if (entry.value.actorAccountId === cleanup[0]?.accountId) {
+        auditKeys.push(entry.key);
+      }
+    }
+    for (const key of auditKeys) await kv.delete(key);
     for (const account of cleanup) {
       for (const token of account.tokens) {
         await kv.delete(["sessions", token]);

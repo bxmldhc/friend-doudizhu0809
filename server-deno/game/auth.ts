@@ -6,6 +6,7 @@ export interface PublicAccount {
   createdAt: number;
   role: "USER" | "ADMIN";
   isAdmin: boolean;
+  disabled: boolean;
 }
 
 interface StoredAccount {
@@ -17,6 +18,8 @@ interface StoredAccount {
   passwordSalt: string;
   passwordIterations: number;
   sessionVersion?: number;
+  disabled?: boolean;
+  disabledAt?: number | null;
 }
 
 interface StoredSession {
@@ -39,6 +42,10 @@ export interface AdminAccountList {
   query: string;
 }
 
+export interface RegistrationSettings {
+  enabled: boolean;
+}
+
 const RESERVED_NICKNAMES = new Set([
   "ai",
   "系统",
@@ -49,6 +56,7 @@ const RESERVED_NICKNAMES = new Set([
 ]);
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_PBKDF2_ITERATIONS = 120_000;
+const REGISTRATION_SETTINGS_KEY: Deno.KvKey = ["settings", "registration"];
 
 export class AuthError extends Error {
   constructor(
@@ -90,6 +98,12 @@ export async function registerAccount(
   rawNickname: string,
   password: string,
 ): Promise<AuthSession> {
+  const registrationEntry = await kv.get<RegistrationSettings>(
+    REGISTRATION_SETTINGS_KEY,
+  );
+  if (registrationEntry.value?.enabled === false) {
+    throw new AuthError("新账号注册暂时关闭", "REGISTRATION_DISABLED", 403);
+  }
   const { nickname, nicknameKey } = validateNickname(rawNickname);
   validatePassword(password);
 
@@ -122,12 +136,25 @@ export async function registerAccount(
   };
 
   const result = await kv.atomic()
+    .check(registrationEntry)
     .check(nicknameEntry)
     .set(["accounts", accountId], account)
     .set(["accountByNickname", nicknameKey], accountId)
     .commit();
   if (!result.ok) {
-    throw new AuthError("该昵称已经被使用", "NICKNAME_TAKEN", 409);
+    if (!(await getRegistrationSettings()).enabled) {
+      throw new AuthError("新账号注册暂时关闭", "REGISTRATION_DISABLED", 403);
+    }
+    if (
+      (await kv.get<string>(["accountByNickname", nicknameKey])).value
+    ) {
+      throw new AuthError("该昵称已经被使用", "NICKNAME_TAKEN", 409);
+    }
+    throw new AuthError(
+      "注册设置刚刚发生变化，请重试",
+      "REGISTRATION_CHANGED",
+      409,
+    );
   }
   return await createSession(account);
 }
@@ -157,6 +184,7 @@ export async function loginAccount(
   if (!constantTimeEqual(actualHash, base64ToBytes(account.passwordHash))) {
     throw invalidCredentials();
   }
+  assertAccountEnabled(account);
   return await createSession(account);
 }
 
@@ -177,6 +205,10 @@ export async function resolveSession(
     session.accountId,
   ])).value;
   if (!account) return null;
+  if (account.disabled) {
+    await kv.delete(key);
+    return null;
+  }
   if (session.sessionVersion !== (account.sessionVersion ?? 0)) {
     await kv.delete(key);
     return null;
@@ -283,6 +315,123 @@ export async function resetAccountPassword(
   return toPublicAccount(updated);
 }
 
+export async function changeOwnPassword(
+  token: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<AuthSession> {
+  validatePassword(currentPassword);
+  validatePassword(newPassword);
+  const { sessionEntry, accountEntry } = await requireStoredSession(token);
+  const account = accountEntry.value!;
+  assertAccountEnabled(account);
+  await assertPasswordMatches(account, currentPassword);
+  if (currentPassword === newPassword) {
+    throw new AuthError(
+      "新密码不能与当前密码相同",
+      "PASSWORD_UNCHANGED",
+    );
+  }
+
+  const updated = await withNewPassword(account, newPassword);
+  updated.sessionVersion = (account.sessionVersion ?? 0) + 1;
+  const replacement = newStoredSession(updated);
+  const replacementToken = randomToken();
+  const result = await kv.atomic()
+    .check(accountEntry)
+    .check(sessionEntry)
+    .set(accountEntry.key, updated)
+    .delete(sessionEntry.key)
+    .set(["sessions", replacementToken], replacement, {
+      expireIn: SESSION_LIFETIME_MS,
+    })
+    .commit();
+  if (!result.ok) {
+    throw new AuthError("账号刚刚发生变化，请重试", "ACCOUNT_CHANGED", 409);
+  }
+  await invalidateAccountSessions(account.accountId, replacementToken);
+  return {
+    token: replacementToken,
+    account: toPublicAccount(updated),
+    expiresAt: replacement.expiresAt,
+  };
+}
+
+export async function logoutOtherSessions(token: string): Promise<AuthSession> {
+  const normalizedToken = token.trim();
+  const { sessionEntry, accountEntry } = await requireStoredSession(
+    normalizedToken,
+  );
+  const account = accountEntry.value!;
+  assertAccountEnabled(account);
+  const updated: StoredAccount = {
+    ...account,
+    sessionVersion: (account.sessionVersion ?? 0) + 1,
+  };
+  const currentSession = newStoredSession(updated);
+  const result = await kv.atomic()
+    .check(accountEntry)
+    .check(sessionEntry)
+    .set(accountEntry.key, updated)
+    .set(sessionEntry.key, currentSession, { expireIn: SESSION_LIFETIME_MS })
+    .commit();
+  if (!result.ok) {
+    throw new AuthError("账号刚刚发生变化，请重试", "ACCOUNT_CHANGED", 409);
+  }
+  await invalidateAccountSessions(account.accountId, normalizedToken);
+  return {
+    token: normalizedToken,
+    account: toPublicAccount(updated),
+    expiresAt: currentSession.expiresAt,
+  };
+}
+
+export async function setAccountDisabled(
+  accountId: string,
+  disabled: boolean,
+): Promise<PublicAccount> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) {
+    throw new AuthError("账号不存在", "ACCOUNT_NOT_FOUND", 404);
+  }
+  const key: Deno.KvKey = ["accounts", normalizedAccountId];
+  const entry = await kv.get<StoredAccount>(key);
+  const account = entry.value;
+  if (!account) {
+    throw new AuthError("账号不存在", "ACCOUNT_NOT_FOUND", 404);
+  }
+  if (Boolean(account.disabled) === disabled) {
+    return toPublicAccount(account);
+  }
+  const updated: StoredAccount = {
+    ...account,
+    disabled,
+    disabledAt: disabled ? Date.now() : null,
+    sessionVersion: disabled
+      ? (account.sessionVersion ?? 0) + 1
+      : account.sessionVersion ?? 0,
+  };
+  const result = await kv.atomic().check(entry).set(key, updated).commit();
+  if (!result.ok) {
+    throw new AuthError("账号刚刚发生变化，请重试", "ACCOUNT_CHANGED", 409);
+  }
+  if (disabled) await invalidateAccountSessions(normalizedAccountId);
+  return toPublicAccount(updated);
+}
+
+export async function getRegistrationSettings(): Promise<RegistrationSettings> {
+  const stored = await kv.get<RegistrationSettings>(REGISTRATION_SETTINGS_KEY);
+  return { enabled: stored.value?.enabled !== false };
+}
+
+export async function setRegistrationEnabled(
+  enabled: boolean,
+): Promise<RegistrationSettings> {
+  const settings = { enabled };
+  await kv.set(REGISTRATION_SETTINGS_KEY, settings);
+  return settings;
+}
+
 export async function logoutSession(token: string) {
   const normalizedToken = token.trim();
   if (normalizedToken) {
@@ -291,22 +440,18 @@ export async function logoutSession(token: string) {
 }
 
 async function createSession(account: StoredAccount): Promise<AuthSession> {
+  assertAccountEnabled(account);
   const token = randomToken();
-  const expiresAt = Date.now() + SESSION_LIFETIME_MS;
+  const session = newStoredSession(account);
   await kv.set(
     ["sessions", token],
-    {
-      accountId: account.accountId,
-      sessionVersion: account.sessionVersion ?? 0,
-      createdAt: Date.now(),
-      expiresAt,
-    } satisfies StoredSession,
+    session,
     { expireIn: SESSION_LIFETIME_MS },
   );
   return {
     token,
     account: toPublicAccount(account),
-    expiresAt,
+    expiresAt: session.expiresAt,
   };
 }
 
@@ -318,6 +463,7 @@ function toPublicAccount(account: StoredAccount): PublicAccount {
     createdAt: account.createdAt,
     role: isAdmin ? "ADMIN" : "USER",
     isAdmin,
+    disabled: Boolean(account.disabled),
   };
 }
 
@@ -330,12 +476,20 @@ export function isAdminAccount(
   return nicknames.has(account.nicknameKey);
 }
 
-async function invalidateAccountSessions(accountId: string): Promise<void> {
+async function invalidateAccountSessions(
+  accountId: string,
+  exceptToken = "",
+): Promise<void> {
   const keys: Deno.KvKey[] = [];
   for await (
     const entry of kv.list<StoredSession>({ prefix: ["sessions"] })
   ) {
-    if (entry.value.accountId === accountId) keys.push(entry.key);
+    if (
+      entry.value.accountId === accountId &&
+      entry.key[1] !== exceptToken
+    ) {
+      keys.push(entry.key);
+    }
   }
   for (let offset = 0; offset < keys.length; offset += 10) {
     let operation = kv.atomic();
@@ -343,6 +497,87 @@ async function invalidateAccountSessions(accountId: string): Promise<void> {
       operation = operation.delete(key);
     }
     await operation.commit();
+  }
+}
+
+async function requireStoredSession(token: string): Promise<{
+  sessionEntry: Deno.KvEntry<StoredSession>;
+  accountEntry: Deno.KvEntry<StoredAccount>;
+}> {
+  const normalizedToken = token.trim();
+  if (!normalizedToken) {
+    throw new AuthError("登录已失效，请重新登录", "AUTH_REQUIRED", 401);
+  }
+  const sessionEntry = await kv.get<StoredSession>([
+    "sessions",
+    normalizedToken,
+  ]);
+  const session = sessionEntry.value;
+  if (!session || session.expiresAt <= Date.now()) {
+    if (session) await kv.delete(sessionEntry.key);
+    throw new AuthError("登录已失效，请重新登录", "AUTH_REQUIRED", 401);
+  }
+  const accountEntry = await kv.get<StoredAccount>([
+    "accounts",
+    session.accountId,
+  ]);
+  const account = accountEntry.value;
+  if (
+    !account ||
+    session.sessionVersion !== (account.sessionVersion ?? 0)
+  ) {
+    await kv.delete(sessionEntry.key);
+    throw new AuthError("登录已失效，请重新登录", "AUTH_REQUIRED", 401);
+  }
+  return { sessionEntry, accountEntry };
+}
+
+function newStoredSession(account: StoredAccount): StoredSession {
+  const createdAt = Date.now();
+  return {
+    accountId: account.accountId,
+    sessionVersion: account.sessionVersion ?? 0,
+    createdAt,
+    expiresAt: createdAt + SESSION_LIFETIME_MS,
+  };
+}
+
+async function assertPasswordMatches(
+  account: StoredAccount,
+  password: string,
+): Promise<void> {
+  const actualHash = await derivePasswordHash(
+    password,
+    base64ToBytes(account.passwordSalt),
+    account.passwordIterations,
+  );
+  if (!constantTimeEqual(actualHash, base64ToBytes(account.passwordHash))) {
+    throw new AuthError("当前密码错误", "CURRENT_PASSWORD_INVALID", 401);
+  }
+}
+
+async function withNewPassword(
+  account: StoredAccount,
+  newPassword: string,
+): Promise<StoredAccount> {
+  const iterations = configuredPasswordIterations();
+  const passwordSaltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const passwordHashBytes = await derivePasswordHash(
+    newPassword,
+    passwordSaltBytes,
+    iterations,
+  );
+  return {
+    ...account,
+    passwordHash: bytesToBase64(passwordHashBytes),
+    passwordSalt: bytesToBase64(passwordSaltBytes),
+    passwordIterations: iterations,
+  };
+}
+
+function assertAccountEnabled(account: StoredAccount): void {
+  if (account.disabled) {
+    throw new AuthError("账号已被禁用", "ACCOUNT_DISABLED", 403);
   }
 }
 
