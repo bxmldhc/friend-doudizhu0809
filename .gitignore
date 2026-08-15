@@ -33,3 +33,4 @@ app/signing.properties
 
 # Browser profiles or generated resource-tool state
 resource/png/edge-profile/
+/.codegraph/

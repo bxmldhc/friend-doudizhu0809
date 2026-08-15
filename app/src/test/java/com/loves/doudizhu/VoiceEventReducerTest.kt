@@ -50,18 +50,23 @@ class VoiceEventReducerTest {
     @Test
     fun authoritativePlayEventMapsServerComboTypes() {
         val mappings = listOf(
-            "SINGLE" to AudioCue.PLAY_SINGLE,
-            "PAIR" to AudioCue.PLAY_PAIR,
-            "TRIPLE_SINGLE" to AudioCue.PLAY_TRIPLE,
-            "STRAIGHT" to AudioCue.PLAY_STRAIGHT,
-            "PAIR_STRAIGHT" to AudioCue.PLAY_STRAIGHT,
-            "AIRPLANE_PAIR" to AudioCue.PLAY_AIRPLANE,
-            "FOUR_TWO_SINGLE" to AudioCue.PLAY_FOUR_WITH_TWO,
-            "BOMB" to AudioCue.PLAY_BOMB,
-            "ROCKET" to AudioCue.PLAY_ROCKET
+            "SINGLE" to listOf(AudioCue.RANK_Q),
+            "PAIR" to listOf(AudioCue.PLAY_PAIR, AudioCue.RANK_Q),
+            "TRIPLE" to listOf(AudioCue.PLAY_TRIPLE, AudioCue.RANK_Q),
+            "TRIPLE_SINGLE" to listOf(AudioCue.PLAY_TRIPLE_SINGLE),
+            "TRIPLE_PAIR" to listOf(AudioCue.PLAY_TRIPLE_PAIR),
+            "STRAIGHT" to listOf(AudioCue.PLAY_STRAIGHT),
+            "PAIR_STRAIGHT" to listOf(AudioCue.PLAY_PAIR_STRAIGHT),
+            "AIRPLANE" to listOf(AudioCue.PLAY_AIRPLANE),
+            "AIRPLANE_SINGLE" to listOf(AudioCue.PLAY_AIRPLANE_SINGLE),
+            "AIRPLANE_PAIR" to listOf(AudioCue.PLAY_AIRPLANE_PAIR),
+            "FOUR_TWO_SINGLE" to listOf(AudioCue.PLAY_FOUR_TWO_SINGLE),
+            "FOUR_TWO_PAIR" to listOf(AudioCue.PLAY_FOUR_TWO_PAIR),
+            "BOMB" to listOf(AudioCue.PLAY_BOMB),
+            "ROCKET" to listOf(AudioCue.PLAY_ROCKET)
         )
 
-        mappings.forEachIndexed { index, (comboType, expectedCue) ->
+        mappings.forEachIndexed { index, (comboType, expectedCues) ->
             val cues = reducer.reduce(
                 "123456",
                 state(
@@ -71,12 +76,56 @@ class VoiceEventReducerTest {
                         id = "123456:1:${index + 1}",
                         type = "PLAY",
                         seat = 0,
-                        comboType = comboType
+                        comboType = comboType,
+                        primaryRank = 12
                     )
                 ),
                 mySeat = 2
             )
-            assertEquals(listOf(expectedCue), cues)
+            assertEquals(expectedCues, cues)
+        }
+    }
+
+    @Test
+    fun singleRankMapsAllServerRankValues() {
+        val expected = listOf(
+            AudioCue.RANK_3,
+            AudioCue.RANK_4,
+            AudioCue.RANK_5,
+            AudioCue.RANK_6,
+            AudioCue.RANK_7,
+            AudioCue.RANK_8,
+            AudioCue.RANK_9,
+            AudioCue.RANK_10,
+            AudioCue.RANK_J,
+            AudioCue.RANK_Q,
+            AudioCue.RANK_K,
+            AudioCue.RANK_A,
+            AudioCue.RANK_2,
+            AudioCue.RANK_SMALL_JOKER,
+            AudioCue.RANK_BIG_JOKER
+        )
+
+        expected.forEachIndexed { index, cue ->
+            val rank = index + 3
+            assertEquals(
+                listOf(cue),
+                reducer.reduce(
+                    "123456",
+                    state(
+                        phase = Phase.PLAYING,
+                        turnIndex = 1,
+                        lastEvent = event(
+                            id = "123456:1:rank-$rank",
+                            type = "PLAY",
+                            seat = 0,
+                            comboType = "SINGLE",
+                            primaryRank = rank
+                        )
+                    ),
+                    mySeat = 2
+                )
+            )
         }
     }
 
@@ -198,13 +247,15 @@ class VoiceEventReducerTest {
         id: String,
         type: String,
         seat: Int,
-        comboType: String? = null
+        comboType: String? = null,
+        primaryRank: Int? = null
     ): ServerGameEvent =
         ServerGameEvent(
             id = id,
             type = type,
             seat = seat,
             automatic = false,
-            comboType = comboType
+            comboType = comboType,
+            primaryRank = primaryRank
         )
 }

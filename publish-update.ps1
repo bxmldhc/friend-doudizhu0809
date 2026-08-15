@@ -1,10 +1,10 @@
-param(
-    [string]$VersionName = "1.2.0",
-    [int]$VersionCode = 3,
+﻿param(
+    [string]$VersionName = "1.3.1",
+    [int]$VersionCode = 5,
     [string[]]$ReleaseNotes = @(
-        "Password confirmation and small-screen scrolling",
-        "Clickable room invitations with direct app entry",
-        "In-game voice toggle, top landlord cards, and player stats"
+        "新增单牌点数真人语音",
+        "新增对子、三带一、顺子、飞机、炸弹等牌型播报",
+        "出牌语音仅由服务器确认事件触发"
     ),
     [switch]$ForceUpdate
 )

@@ -36,7 +36,7 @@ class VoiceEventReducer {
             val event = state.lastEvent
             if (event != null && event.id != lastEventId) {
                 if (event.type == "PLAY") {
-                    playCue(event.comboType)?.let(::add)
+                    addAll(playCues(event.comboType, event.primaryRank))
                 } else {
                     actionCue(event.type)?.let(::add)
                 }
@@ -92,15 +92,40 @@ class VoiceEventReducer {
         else -> null
     }
 
-    private fun playCue(comboType: String?): AudioCue? = when (comboType) {
-        "SINGLE" -> AudioCue.PLAY_SINGLE
-        "PAIR" -> AudioCue.PLAY_PAIR
-        "TRIPLE", "TRIPLE_SINGLE", "TRIPLE_PAIR" -> AudioCue.PLAY_TRIPLE
-        "STRAIGHT", "PAIR_STRAIGHT" -> AudioCue.PLAY_STRAIGHT
-        "AIRPLANE", "AIRPLANE_SINGLE", "AIRPLANE_PAIR" -> AudioCue.PLAY_AIRPLANE
-        "FOUR_TWO_SINGLE", "FOUR_TWO_PAIR" -> AudioCue.PLAY_FOUR_WITH_TWO
-        "BOMB" -> AudioCue.PLAY_BOMB
-        "ROCKET" -> AudioCue.PLAY_ROCKET
+    private fun playCues(comboType: String?, primaryRank: Int?): List<AudioCue> = when (comboType) {
+        "SINGLE" -> rankCue(primaryRank)?.let(::listOf).orEmpty()
+        "PAIR" -> listOfNotNull(AudioCue.PLAY_PAIR, rankCue(primaryRank))
+        "TRIPLE" -> listOfNotNull(AudioCue.PLAY_TRIPLE, rankCue(primaryRank))
+        "TRIPLE_SINGLE" -> listOf(AudioCue.PLAY_TRIPLE_SINGLE)
+        "TRIPLE_PAIR" -> listOf(AudioCue.PLAY_TRIPLE_PAIR)
+        "STRAIGHT" -> listOf(AudioCue.PLAY_STRAIGHT)
+        "PAIR_STRAIGHT" -> listOf(AudioCue.PLAY_PAIR_STRAIGHT)
+        "AIRPLANE" -> listOf(AudioCue.PLAY_AIRPLANE)
+        "AIRPLANE_SINGLE" -> listOf(AudioCue.PLAY_AIRPLANE_SINGLE)
+        "AIRPLANE_PAIR" -> listOf(AudioCue.PLAY_AIRPLANE_PAIR)
+        "FOUR_TWO_SINGLE" -> listOf(AudioCue.PLAY_FOUR_TWO_SINGLE)
+        "FOUR_TWO_PAIR" -> listOf(AudioCue.PLAY_FOUR_TWO_PAIR)
+        "BOMB" -> listOf(AudioCue.PLAY_BOMB)
+        "ROCKET" -> listOf(AudioCue.PLAY_ROCKET)
+        else -> emptyList()
+    }
+
+    private fun rankCue(rank: Int?): AudioCue? = when (rank) {
+        3 -> AudioCue.RANK_3
+        4 -> AudioCue.RANK_4
+        5 -> AudioCue.RANK_5
+        6 -> AudioCue.RANK_6
+        7 -> AudioCue.RANK_7
+        8 -> AudioCue.RANK_8
+        9 -> AudioCue.RANK_9
+        10 -> AudioCue.RANK_10
+        11 -> AudioCue.RANK_J
+        12 -> AudioCue.RANK_Q
+        13 -> AudioCue.RANK_K
+        14 -> AudioCue.RANK_A
+        15 -> AudioCue.RANK_2
+        16 -> AudioCue.RANK_SMALL_JOKER
+        17 -> AudioCue.RANK_BIG_JOKER
         else -> null
     }
 
