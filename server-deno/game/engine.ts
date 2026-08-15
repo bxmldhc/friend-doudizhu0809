@@ -252,7 +252,7 @@ export class DoudizhuEngine {
     }
   }
 
-  submitPlay(cards: Card[]) {
+  submitPlay(cards: Card[]): Pattern {
     if (this.state.phase !== "PLAYING") throw new Error("现在不能出牌");
     const error = this.validatePlay(cards);
     if (error) throw new Error(error);
@@ -285,7 +285,7 @@ export class DoudizhuEngine {
         multiplier,
       };
       this.finishGame(this.state.turnIndex, multiplier);
-      return;
+      return pattern;
     }
     this.state = {
       ...this.state,
@@ -302,6 +302,7 @@ export class DoudizhuEngine {
       multiplier,
       message: `${seat.name} 出牌`,
     };
+    return pattern;
   }
 
   validatePlay(cards: Card[]): string | null {

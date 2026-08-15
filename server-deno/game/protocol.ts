@@ -1,6 +1,7 @@
 import { Card, cardNotation, parseCards } from "./cards.ts";
 import { EngineState, Phase, SeatAction, SeatState } from "./engine.ts";
 import { Difficulty } from "./engine.ts";
+import { ComboType } from "./hand.ts";
 
 export type RemoteAction =
   | { kind: "CALL"; want: boolean }
@@ -63,6 +64,9 @@ export interface ServerGameEvent {
   seat: number | null;
   automatic: boolean;
   at: number;
+  comboType?: ComboType;
+  primaryRank?: number;
+  comboLength?: number;
 }
 
 export interface RoomStateContext {

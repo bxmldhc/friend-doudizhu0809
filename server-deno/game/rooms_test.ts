@@ -1,3 +1,4 @@
+import { DoudizhuEngine } from "./engine.ts";
 import { RoomManager } from "./rooms.ts";
 import { kv } from "./db.ts";
 import { getStats } from "./store.ts";
@@ -532,5 +533,46 @@ Deno.test("state events use unique revisions for confirmed player actions", () =
     actedEvent.automatic !== false
   ) {
     throw new Error("confirmed action did not advance the authoritative event");
+  }
+});
+
+Deno.test("confirmed PLAY event includes authoritative combo metadata", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const players = [new FakeSocket(), new FakeSocket(), new FakeSocket()];
+  manager.create(socket(players[0]), "host", "MEDIUM", 0);
+  const code = roomCode(players[0]);
+  manager.join(socket(players[1]), code, "friend-1");
+  manager.join(socket(players[2]), code, "friend-2");
+  manager.start(socket(players[0]));
+
+  const internal = manager as unknown as {
+    rooms: Map<string, { engine: DoudizhuEngine | null }>;
+  };
+  const engine = internal.rooms.get(code)?.engine;
+  if (!engine) throw new Error("test room did not start");
+  engine.state = {
+    ...engine.state,
+    phase: "PLAYING",
+    turnIndex: 0,
+    lastPlay: [],
+    lastPlayerIndex: null,
+    passes: 0,
+    seats: engine.state.seats.map((seat, index) => ({
+      ...seat,
+      hand: index === 0
+        ? [{ r: 3, s: "S" }, { r: 4, s: "S" }]
+        : [{ r: 7 + index, s: "S" }],
+    })),
+  };
+
+  manager.action(socket(players[0]), 0, { kind: "PLAY", cards: ["3S"] });
+
+  const state = latestState(players[0]).state as Record<string, unknown>;
+  const event = state.lastEvent as Record<string, unknown>;
+  if (
+    event.type !== "PLAY" || event.comboType !== "SINGLE" ||
+    event.primaryRank !== 3 || event.comboLength !== 1
+  ) {
+    throw new Error("confirmed PLAY event omitted authoritative combo metadata");
   }
 });

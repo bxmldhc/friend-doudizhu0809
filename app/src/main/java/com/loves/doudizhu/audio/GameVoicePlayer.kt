@@ -75,5 +75,13 @@ class GameVoicePlayer(context: Context) {
         AudioCue.CARDS_LEFT_TWO -> R.raw.cards_left_two
         AudioCue.CARDS_LEFT_ONE -> R.raw.cards_left_one
         AudioCue.YOUR_TURN -> R.raw.your_turn
+        AudioCue.PLAY_SINGLE -> R.raw.card_play
+        AudioCue.PLAY_PAIR -> R.raw.play_pair
+        AudioCue.PLAY_TRIPLE -> R.raw.play_triple
+        AudioCue.PLAY_STRAIGHT -> R.raw.play_straight
+        AudioCue.PLAY_AIRPLANE -> R.raw.play_airplane
+        AudioCue.PLAY_FOUR_WITH_TWO -> R.raw.card_play
+        AudioCue.PLAY_BOMB -> R.raw.play_bomb
+        AudioCue.PLAY_ROCKET -> R.raw.play_rocket
     }
 }

@@ -96,6 +96,20 @@ Deno.test("出牌按座位写入本轮独立出牌区，并保留兼容字段", 
   }
 });
 
+Deno.test("submitPlay 返回服务器确认的权威牌型", () => {
+  const engine = new DoudizhuEngine({ humanCount: 3, difficulty: "MEDIUM" });
+  engine.state = playingState();
+
+  const pattern = engine.submitPlay([card(3)]);
+
+  if (
+    pattern.type !== "SINGLE" || pattern.primary !== 3 ||
+    pattern.length !== 1
+  ) {
+    throw new Error("submitPlay 未返回准确的服务器牌型");
+  }
+});
+
 Deno.test("两次 PASS 只清空裁判上一手，保留三家本轮视觉出牌", () => {
   const engine = new DoudizhuEngine({ humanCount: 3, difficulty: "MEDIUM" });
   engine.state = playingState();

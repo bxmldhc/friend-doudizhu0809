@@ -35,7 +35,11 @@ class VoiceEventReducer {
         val cues = buildList {
             val event = state.lastEvent
             if (event != null && event.id != lastEventId) {
-                actionCue(event.type)?.let(::add)
+                if (event.type == "PLAY") {
+                    playCue(event.comboType)?.let(::add)
+                } else {
+                    actionCue(event.type)?.let(::add)
+                }
                 if (event.type == "PLAY" && event.seat == mySeat) {
                     handCountCue(state.seats.getOrNull(mySeat)?.handCount)?.let(::add)
                 }
@@ -85,6 +89,18 @@ class VoiceEventReducer {
         "NOT_CALL" -> AudioCue.NOT_CALL
         "NOT_ROB" -> AudioCue.NOT_ROB
         "PASS" -> AudioCue.PASS
+        else -> null
+    }
+
+    private fun playCue(comboType: String?): AudioCue? = when (comboType) {
+        "SINGLE" -> AudioCue.PLAY_SINGLE
+        "PAIR" -> AudioCue.PLAY_PAIR
+        "TRIPLE", "TRIPLE_SINGLE", "TRIPLE_PAIR" -> AudioCue.PLAY_TRIPLE
+        "STRAIGHT", "PAIR_STRAIGHT" -> AudioCue.PLAY_STRAIGHT
+        "AIRPLANE", "AIRPLANE_SINGLE", "AIRPLANE_PAIR" -> AudioCue.PLAY_AIRPLANE
+        "FOUR_TWO_SINGLE", "FOUR_TWO_PAIR" -> AudioCue.PLAY_FOUR_WITH_TWO
+        "BOMB" -> AudioCue.PLAY_BOMB
+        "ROCKET" -> AudioCue.PLAY_ROCKET
         else -> null
     }
 

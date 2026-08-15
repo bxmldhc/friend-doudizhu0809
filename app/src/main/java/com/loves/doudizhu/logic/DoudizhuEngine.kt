@@ -62,7 +62,10 @@ data class ServerGameEvent(
     val id: String,
     val type: String,
     val seat: Int?,
-    val automatic: Boolean
+    val automatic: Boolean,
+    val comboType: String? = null,
+    val primaryRank: Int? = null,
+    val comboLength: Int? = null
 )
 
 data class EngineState(

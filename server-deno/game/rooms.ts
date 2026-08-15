@@ -10,6 +10,7 @@ import {
 import { recordGame } from "./store.ts";
 import { parseCards } from "./cards.ts";
 import { resolveSession } from "./auth.ts";
+import { Pattern } from "./hand.ts";
 
 interface Room {
   code: string;
@@ -498,14 +499,15 @@ export class RoomManager {
     if (engine.state.turnIndex !== seat) return;
     try {
       const eventType = this.actionEventType(engine.state, action);
+      let playPattern: Pattern | undefined;
       if (action.kind === "CALL") {
         engine.submitCall(action.want);
       } else if (action.kind === "PLAY") {
-        engine.submitPlay(parseCards(action.cards));
+        playPattern = engine.submitPlay(parseCards(action.cards));
       } else {
         engine.submitPass();
       }
-      this.markEvent(room, eventType, seat, false);
+      this.markEvent(room, eventType, seat, false, playPattern);
       this.afterEngineChange(room);
     } catch (err) {
       const ws = room.sockets[seat];
@@ -581,8 +583,8 @@ export class RoomManager {
         if (action.type !== "play") {
           throw new Error("服务器未找到可代出的合法牌");
         }
-        engine.submitPlay(action.cards);
-        this.markEvent(room, "PLAY", seat, true);
+        const playPattern = engine.submitPlay(action.cards);
+        this.markEvent(room, "PLAY", seat, true, playPattern);
         timeoutAction = "由服务器代出";
       }
       engine.state = {
@@ -621,8 +623,8 @@ export class RoomManager {
           engine.submitCall(action.want);
           this.markEvent(room, eventType, seat, true);
         } else if (action.type === "play") {
-          engine.submitPlay(action.cards);
-          this.markEvent(room, "PLAY", seat, true);
+          const playPattern = engine.submitPlay(action.cards);
+          this.markEvent(room, "PLAY", seat, true, playPattern);
         } else {
           engine.submitPass();
           this.markEvent(room, "PASS", seat, true);
@@ -674,6 +676,7 @@ export class RoomManager {
     type: string,
     seat: number | null,
     automatic: boolean,
+    playPattern?: Pattern,
   ) {
     room.revision += 1;
     room.lastEvent = {
@@ -682,6 +685,13 @@ export class RoomManager {
       seat,
       automatic,
       at: Date.now(),
+      ...(type === "PLAY" && playPattern
+        ? {
+          comboType: playPattern.type,
+          primaryRank: playPattern.primary,
+          comboLength: playPattern.length,
+        }
+        : {}),
     };
   }
 

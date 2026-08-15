@@ -91,6 +91,9 @@ object GameCodec {
                 put("type", event.type)
                 put("seat", event.seat ?: JSONObject.NULL)
                 put("automatic", event.automatic)
+                event.comboType?.let { put("comboType", it) }
+                event.primaryRank?.let { put("primaryRank", it) }
+                event.comboLength?.let { put("comboLength", it) }
             }
         } ?: JSONObject.NULL)
         return obj.toString()
@@ -210,7 +213,10 @@ object GameCodec {
                     id = event.optString("id"),
                     type = event.optString("type"),
                     seat = nullableInt(event, "seat"),
-                    automatic = event.optBoolean("automatic", false)
+                    automatic = event.optBoolean("automatic", false),
+                    comboType = nullableString(event, "comboType"),
+                    primaryRank = nullableInt(event, "primaryRank"),
+                    comboLength = nullableInt(event, "comboLength")
                 )
             }
         )

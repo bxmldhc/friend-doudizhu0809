@@ -48,6 +48,56 @@ class VoiceEventReducerTest {
     }
 
     @Test
+    fun authoritativePlayEventMapsServerComboTypes() {
+        val mappings = listOf(
+            "SINGLE" to AudioCue.PLAY_SINGLE,
+            "PAIR" to AudioCue.PLAY_PAIR,
+            "TRIPLE_SINGLE" to AudioCue.PLAY_TRIPLE,
+            "STRAIGHT" to AudioCue.PLAY_STRAIGHT,
+            "PAIR_STRAIGHT" to AudioCue.PLAY_STRAIGHT,
+            "AIRPLANE_PAIR" to AudioCue.PLAY_AIRPLANE,
+            "FOUR_TWO_SINGLE" to AudioCue.PLAY_FOUR_WITH_TWO,
+            "BOMB" to AudioCue.PLAY_BOMB,
+            "ROCKET" to AudioCue.PLAY_ROCKET
+        )
+
+        mappings.forEachIndexed { index, (comboType, expectedCue) ->
+            val cues = reducer.reduce(
+                "123456",
+                state(
+                    phase = Phase.PLAYING,
+                    turnIndex = 1,
+                    lastEvent = event(
+                        id = "123456:1:${index + 1}",
+                        type = "PLAY",
+                        seat = 0,
+                        comboType = comboType
+                    )
+                ),
+                mySeat = 2
+            )
+            assertEquals(listOf(expectedCue), cues)
+        }
+    }
+
+    @Test
+    fun legacyPlayEventWithoutComboDoesNotGuessAudio() {
+        reducer.reset("123456")
+
+        val cues = reducer.reduce(
+            "123456",
+            state(
+                phase = Phase.PLAYING,
+                turnIndex = 1,
+                lastEvent = event("123456:1:1", "PLAY", 0)
+            ),
+            mySeat = 2
+        )
+
+        assertEquals(emptyList<AudioCue>(), cues)
+    }
+
+    @Test
     fun ownPlayAnnouncesLowCardsAndNewTurn() {
         reducer.reset("123456")
         reducer.reduce(
@@ -144,11 +194,17 @@ class VoiceEventReducerTest {
         lastEvent = lastEvent
     )
 
-    private fun event(id: String, type: String, seat: Int): ServerGameEvent =
+    private fun event(
+        id: String,
+        type: String,
+        seat: Int,
+        comboType: String? = null
+    ): ServerGameEvent =
         ServerGameEvent(
             id = id,
             type = type,
             seat = seat,
-            automatic = false
+            automatic = false,
+            comboType = comboType
         )
 }
