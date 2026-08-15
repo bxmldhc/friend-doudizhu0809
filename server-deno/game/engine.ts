@@ -50,6 +50,8 @@ export interface EngineState {
   passes: number;
   bottomCards: Card[];
   multiplier: number;
+  /** Publicly played card counts by rank. Never includes hidden hands. */
+  seenRanks: Record<number, number>;
   winnerIndex: number | null;
   scoreDelta: number[];
   message: string;
@@ -85,6 +87,7 @@ export class DoudizhuEngine {
     lastActionsBySeat: [null, null, null],
     passes: 0,
     multiplier: 1,
+    seenRanks: {},
     winnerIndex: null,
     scoreDelta: [],
   };
@@ -132,6 +135,7 @@ export class DoudizhuEngine {
       lastActionsBySeat: [null, null, null],
       passes: 0,
       multiplier: 1,
+      seenRanks: {},
       winnerIndex: null,
       scoreDelta: [],
       message: "等待叫地主",
@@ -264,6 +268,10 @@ export class DoudizhuEngine {
       ? this.state.multiplier * 2
       : this.state.multiplier;
     const playedCards = sortCards(cards);
+    const seenRanks = { ...this.state.seenRanks };
+    for (const card of playedCards) {
+      seenRanks[card.r] = (seenRanks[card.r] ?? 0) + 1;
+    }
     const lastPlaysBySeat = this.state.lastPlaysBySeat.map((play, index) =>
       index === this.state.turnIndex ? playedCards : play
     );
@@ -282,6 +290,7 @@ export class DoudizhuEngine {
         lastPlayerIndex: this.state.turnIndex,
         lastPlaysBySeat,
         lastActionsBySeat,
+        seenRanks,
         multiplier,
       };
       this.finishGame(this.state.turnIndex, multiplier);
@@ -298,6 +307,7 @@ export class DoudizhuEngine {
       lastPlayerIndex: this.state.turnIndex,
       lastPlaysBySeat,
       lastActionsBySeat,
+      seenRanks,
       passes: 0,
       multiplier,
       message: `${seat.name} 出牌`,
@@ -389,6 +399,7 @@ export class DoudizhuEngine {
       lastActionsBySeat: [null, null, null],
       passes: 0,
       multiplier: bidMultiplier,
+      seenRanks: {},
       message: `${newSeats[index].name} 成为地主`,
     };
   }

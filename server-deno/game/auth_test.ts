@@ -3,6 +3,7 @@ import {
   loginAccount,
   logoutSession,
   registerAccount,
+  resetAccountPassword,
   resolveSession,
 } from "./auth.ts";
 import { getStats, recordGame } from "./store.ts";
@@ -60,6 +61,39 @@ Deno.test("account login, uniqueness, session and stats use accountId", async ()
     await logoutSession(registered.token);
     if (await resolveSession(registered.token)) {
       throw new Error("退出登录后会话仍然有效");
+    }
+  } finally {
+    if (previousIterations === undefined) {
+      Deno.env.delete("AUTH_PBKDF2_ITERATIONS");
+    } else {
+      Deno.env.set("AUTH_PBKDF2_ITERATIONS", previousIterations);
+    }
+  }
+});
+
+Deno.test("password reset revokes every earlier session by account version", async () => {
+  const previousIterations = Deno.env.get("AUTH_PBKDF2_ITERATIONS");
+  Deno.env.set("AUTH_PBKDF2_ITERATIONS", "10000");
+  const nickname = `重置${crypto.randomUUID().slice(0, 8)}`;
+
+  try {
+    const first = await registerAccount(nickname, "secret12");
+    const second = await loginAccount(nickname, "secret12");
+    await resetAccountPassword(first.account.accountId, "changed12");
+
+    if (
+      await resolveSession(first.token) ||
+      await resolveSession(second.token)
+    ) {
+      throw new Error("密码重置后旧会话仍然有效");
+    }
+
+    const current = await loginAccount(nickname, "changed12");
+    if (
+      (await resolveSession(current.token))?.accountId !==
+        first.account.accountId
+    ) {
+      throw new Error("新密码登录后的会话无法解析");
     }
   } finally {
     if (previousIterations === undefined) {

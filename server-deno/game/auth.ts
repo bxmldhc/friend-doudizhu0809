@@ -4,17 +4,24 @@ export interface PublicAccount {
   accountId: string;
   nickname: string;
   createdAt: number;
+  role: "USER" | "ADMIN";
+  isAdmin: boolean;
 }
 
-interface StoredAccount extends PublicAccount {
+interface StoredAccount {
+  accountId: string;
+  nickname: string;
+  createdAt: number;
   nicknameKey: string;
   passwordHash: string;
   passwordSalt: string;
   passwordIterations: number;
+  sessionVersion?: number;
 }
 
 interface StoredSession {
   accountId: string;
+  sessionVersion: number;
   createdAt: number;
   expiresAt: number;
 }
@@ -23,6 +30,13 @@ export interface AuthSession {
   token: string;
   account: PublicAccount;
   expiresAt: number;
+}
+
+export interface AdminAccountList {
+  accounts: PublicAccount[];
+  total: number;
+  limit: number;
+  query: string;
 }
 
 const RESERVED_NICKNAMES = new Set([
@@ -103,6 +117,7 @@ export async function registerAccount(
     passwordHash: bytesToBase64(passwordHashBytes),
     passwordSalt: bytesToBase64(passwordSaltBytes),
     passwordIterations: iterations,
+    sessionVersion: 0,
     createdAt,
   };
 
@@ -161,7 +176,12 @@ export async function resolveSession(
     "accounts",
     session.accountId,
   ])).value;
-  return account ? toPublicAccount(account) : null;
+  if (!account) return null;
+  if (session.sessionVersion !== (account.sessionVersion ?? 0)) {
+    await kv.delete(key);
+    return null;
+  }
+  return toPublicAccount(account);
 }
 
 export async function getPublicAccount(
@@ -174,6 +194,93 @@ export async function getPublicAccount(
     normalizedAccountId,
   ])).value;
   return account ? toPublicAccount(account) : null;
+}
+
+export async function listAccountsForAdmin(
+  rawQuery = "",
+  requestedLimit = 100,
+): Promise<AdminAccountList> {
+  const query = rawQuery.trim().normalize("NFKC").toLocaleLowerCase("zh-CN");
+  const limit = Math.max(
+    1,
+    Math.min(
+      100,
+      Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 100,
+    ),
+  );
+  const matches: PublicAccount[] = [];
+  let total = 0;
+
+  for await (const entry of kv.list<StoredAccount>({ prefix: ["accounts"] })) {
+    const account = entry.value;
+    if (
+      query &&
+      !account.nicknameKey.includes(query) &&
+      !account.accountId.toLocaleLowerCase().includes(query)
+    ) {
+      continue;
+    }
+    total += 1;
+    matches.push(toPublicAccount(account));
+  }
+
+  matches.sort((left, right) =>
+    right.createdAt - left.createdAt ||
+    left.nickname.localeCompare(right.nickname, "zh-CN")
+  );
+  return {
+    accounts: matches.slice(0, limit),
+    total,
+    limit,
+    query: rawQuery.trim(),
+  };
+}
+
+export async function countAccounts(): Promise<number> {
+  let total = 0;
+  for await (const _entry of kv.list({ prefix: ["accounts"] })) {
+    total += 1;
+  }
+  return total;
+}
+
+export async function resetAccountPassword(
+  accountId: string,
+  newPassword: string,
+): Promise<PublicAccount> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) {
+    throw new AuthError("账号不存在", "ACCOUNT_NOT_FOUND", 404);
+  }
+  validatePassword(newPassword);
+
+  const key: Deno.KvKey = ["accounts", normalizedAccountId];
+  const entry = await kv.get<StoredAccount>(key);
+  const account = entry.value;
+  if (!account) {
+    throw new AuthError("账号不存在", "ACCOUNT_NOT_FOUND", 404);
+  }
+
+  const iterations = configuredPasswordIterations();
+  const passwordSaltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const passwordHashBytes = await derivePasswordHash(
+    newPassword,
+    passwordSaltBytes,
+    iterations,
+  );
+  const updated: StoredAccount = {
+    ...account,
+    passwordHash: bytesToBase64(passwordHashBytes),
+    passwordSalt: bytesToBase64(passwordSaltBytes),
+    passwordIterations: iterations,
+    sessionVersion: (account.sessionVersion ?? 0) + 1,
+  };
+  const result = await kv.atomic().check(entry).set(key, updated).commit();
+  if (!result.ok) {
+    throw new AuthError("账号刚刚发生变化，请重试", "ACCOUNT_CHANGED", 409);
+  }
+  await invalidateAccountSessions(normalizedAccountId);
+  return toPublicAccount(updated);
 }
 
 export async function logoutSession(token: string) {
@@ -190,6 +297,7 @@ async function createSession(account: StoredAccount): Promise<AuthSession> {
     ["sessions", token],
     {
       accountId: account.accountId,
+      sessionVersion: account.sessionVersion ?? 0,
       createdAt: Date.now(),
       expiresAt,
     } satisfies StoredSession,
@@ -203,11 +311,48 @@ async function createSession(account: StoredAccount): Promise<AuthSession> {
 }
 
 function toPublicAccount(account: StoredAccount): PublicAccount {
+  const isAdmin = isAdminAccount(account);
   return {
     accountId: account.accountId,
     nickname: account.nickname,
     createdAt: account.createdAt,
+    role: isAdmin ? "ADMIN" : "USER",
+    isAdmin,
   };
+}
+
+export function isAdminAccount(
+  account: Pick<StoredAccount, "accountId" | "nicknameKey">,
+): boolean {
+  const accountIds = configuredAdminValues("ADMIN_ACCOUNT_IDS");
+  if (accountIds.has(account.accountId.toLocaleLowerCase())) return true;
+  const nicknames = configuredAdminValues("ADMIN_NICKNAMES");
+  return nicknames.has(account.nicknameKey);
+}
+
+async function invalidateAccountSessions(accountId: string): Promise<void> {
+  const keys: Deno.KvKey[] = [];
+  for await (
+    const entry of kv.list<StoredSession>({ prefix: ["sessions"] })
+  ) {
+    if (entry.value.accountId === accountId) keys.push(entry.key);
+  }
+  for (let offset = 0; offset < keys.length; offset += 10) {
+    let operation = kv.atomic();
+    for (const key of keys.slice(offset, offset + 10)) {
+      operation = operation.delete(key);
+    }
+    await operation.commit();
+  }
+}
+
+function configuredAdminValues(name: string): Set<string> {
+  return new Set(
+    (Deno.env.get(name) ?? "")
+      .split(",")
+      .map((value) => value.trim().normalize("NFKC").toLocaleLowerCase("zh-CN"))
+      .filter(Boolean),
+  );
 }
 
 function configuredPasswordIterations(): number {

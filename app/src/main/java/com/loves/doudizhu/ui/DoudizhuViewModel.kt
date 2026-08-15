@@ -10,6 +10,9 @@ import com.loves.doudizhu.logic.EngineState
 import com.loves.doudizhu.model.Card
 import com.loves.doudizhu.model.GameConfig
 import com.loves.doudizhu.network.AccountStats
+import com.loves.doudizhu.network.AdminAccount
+import com.loves.doudizhu.network.AdminOverview
+import com.loves.doudizhu.network.AdminRoom
 import com.loves.doudizhu.network.ApiResult
 import com.loves.doudizhu.network.AuthApi
 import com.loves.doudizhu.network.AuthSession
@@ -18,8 +21,11 @@ import com.loves.doudizhu.network.InviteLink
 import com.loves.doudizhu.network.OnlineClient
 import com.loves.doudizhu.network.PublicPlayerStats
 import com.loves.doudizhu.network.RemoteAction
+import com.loves.doudizhu.network.ServerError
 import com.loves.doudizhu.network.AppUpdateInfo
 import com.loves.doudizhu.network.UpdateApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -27,8 +33,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.UUID
 import java.io.File
 
@@ -38,15 +42,6 @@ enum class AppConnectionState {
     ONLINE,
     RECONNECTING
 }
-
-data class HistoryEntry(
-    val time: Long,
-    val roomCode: String,
-    val winner: String,
-    val multiplier: Int,
-    val scoreDelta: List<Int>,
-    val players: List<String>
-)
 
 sealed interface UpdateUiState {
     data object Idle : UpdateUiState
@@ -78,7 +73,9 @@ sealed interface GameUiState {
         val nickname: String,
         val serverUrl: String = DEFAULT_SERVER_URL,
         val connection: AppConnectionState = AppConnectionState.OFFLINE,
-        val voiceEnabled: Boolean = true
+        val voiceEnabled: Boolean = true,
+        val resumeRoomCode: String? = null,
+        val isAdmin: Boolean = false
     ) : GameUiState
 
     data class CreateRoom(
@@ -118,10 +115,19 @@ sealed interface GameUiState {
     ) : GameUiState
 
     data class History(
-        val entries: List<HistoryEntry>,
         val stats: AccountStats? = null,
         val loading: Boolean = true,
         val error: String? = null
+    ) : GameUiState
+
+    data class Admin(
+        val overview: AdminOverview? = null,
+        val accounts: List<AdminAccount> = emptyList(),
+        val rooms: List<AdminRoom> = emptyList(),
+        val loading: Boolean = true,
+        val error: String? = null,
+        val query: String = "",
+        val resettingAccountId: String? = null
     ) : GameUiState
 }
 
@@ -167,13 +173,16 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private var isHost = false
     private var lastRoomWasCreate = false
     private var lastRequestedRoom: String? = null
-    private var lastRecordedGame = -1
     private var lastServerUrl = preferences.getString("serverUrl", DEFAULT_SERVER_URL)
         ?.takeIf { it.isNotBlank() }
         ?: DEFAULT_SERVER_URL
     private var connection = AppConnectionState.OFFLINE
     private var voiceEnabled = preferences.getBoolean("voiceEnabled", true)
     private var updateChecked = false
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
+    private var allowAutomaticReconnect = true
+    private var authVerifiedThisProcess = false
     private val voiceEventReducer = VoiceEventReducer()
     private var voiceRoomCode = ""
 
@@ -189,19 +198,18 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             when (val result = authApi.me(httpBaseUrl(lastServerUrl), session.authToken)) {
                 is ApiResult.Success -> {
                     saveAuthSession(result.data)
+                    authVerifiedThisProcess = true
                     continueAfterAuthentication()
                 }
                 is ApiResult.Failure -> {
-                    clearAuthSession()
-                    _uiState.value = GameUiState.Auth(
-                        serverUrl = lastServerUrl,
-                        pendingRoom = pendingInviteRoom,
-                        error = if (result.isUnauthorized) {
-                            "登录已过期，请重新登录"
-                        } else {
-                            "暂时无法验证登录状态：${result.message}"
-                        }
-                    )
+                    if (result.isUnauthorized) {
+                        clearAuthSession()
+                        showAuth("登录已过期，请重新登录")
+                    } else {
+                        authVerifiedThisProcess = false
+                        _toast.value = "暂时无法验证登录状态：${result.message}"
+                        _uiState.value = homeState()
+                    }
                 }
             }
         }
@@ -248,6 +256,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             when (result) {
                 is ApiResult.Success -> {
                     saveAuthSession(result.data)
+                    authVerifiedThisProcess = true
                     continueAfterAuthentication()
                 }
                 is ApiResult.Failure -> {
@@ -318,8 +327,116 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openHistory() {
+        _uiState.value = GameUiState.History()
+        loadHistory()
+    }
+
+    fun openAdmin() {
+        if (authSession?.isAdmin != true) {
+            _toast.value = "当前账号没有管理权限"
+            return
+        }
+        _uiState.value = GameUiState.Admin()
+        loadAdmin()
+    }
+
+    fun retryAdmin() {
+        val current = _uiState.value as? GameUiState.Admin ?: return
+        _uiState.value = current.copy(loading = true, error = null)
+        loadAdmin(current.query)
+    }
+
+    fun searchAdminAccounts(query: String) {
+        val current = _uiState.value as? GameUiState.Admin ?: return
+        _uiState.value = current.copy(query = query, loading = true, error = null)
+        loadAdmin(query)
+    }
+
+    fun resetAdminPassword(accountId: String, newPassword: String) {
         val session = authSession ?: return showAuth()
-        _uiState.value = GameUiState.History(entries = loadHistory())
+        if (!session.isAdmin) return
+        val current = _uiState.value as? GameUiState.Admin ?: return
+        if (newPassword.length !in 6..64) {
+            _toast.value = "新密码需要 6 到 64 个字符"
+            return
+        }
+        _uiState.value = current.copy(resettingAccountId = accountId)
+        viewModelScope.launch {
+            when (
+                val result = authApi.resetAdminPassword(
+                    httpBaseUrl(lastServerUrl),
+                    session.authToken,
+                    accountId,
+                    newPassword
+                )
+            ) {
+                is ApiResult.Success -> {
+                    _toast.value = "已重置 ${result.data.nickname} 的密码"
+                    loadAdmin((_uiState.value as? GameUiState.Admin)?.query.orEmpty())
+                }
+                is ApiResult.Failure -> {
+                    if (result.isUnauthorized) {
+                        handleAuthenticationExpired()
+                    } else {
+                        val state = _uiState.value as? GameUiState.Admin ?: return@launch
+                        _uiState.value = state.copy(
+                            resettingAccountId = null,
+                            error = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loadAdmin(query: String = "") {
+        val session = authSession ?: return showAuth()
+        if (!session.isAdmin) return backHome()
+        viewModelScope.launch {
+            val overview = authApi.adminOverview(httpBaseUrl(lastServerUrl), session.authToken)
+            val accounts = authApi.adminAccounts(
+                httpBaseUrl(lastServerUrl),
+                session.authToken,
+                query
+            )
+            val rooms = authApi.adminRooms(httpBaseUrl(lastServerUrl), session.authToken)
+            val failure = listOf(overview, accounts, rooms)
+                .filterIsInstance<ApiResult.Failure>()
+                .firstOrNull()
+            if (failure != null) {
+                if (failure.isUnauthorized) {
+                    handleAuthenticationExpired()
+                } else {
+                    val current = _uiState.value as? GameUiState.Admin ?: return@launch
+                    _uiState.value = current.copy(
+                        loading = false,
+                        resettingAccountId = null,
+                        error = failure.message
+                    )
+                }
+                return@launch
+            }
+            val current = _uiState.value as? GameUiState.Admin ?: return@launch
+            _uiState.value = current.copy(
+                overview = (overview as ApiResult.Success).data,
+                accounts = (accounts as ApiResult.Success).data.accounts,
+                rooms = (rooms as ApiResult.Success).data.rooms,
+                loading = false,
+                resettingAccountId = null,
+                error = null,
+                query = query
+            )
+        }
+    }
+
+    fun retryHistory() {
+        val current = _uiState.value as? GameUiState.History ?: return
+        _uiState.value = current.copy(loading = true, error = null)
+        loadHistory()
+    }
+
+    private fun loadHistory() {
+        val session = authSession ?: return showAuth()
         viewModelScope.launch {
             when (val result = authApi.stats(httpBaseUrl(lastServerUrl), session.authToken)) {
                 is ApiResult.Success -> {
@@ -492,6 +609,9 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun retryConnection() {
+        reconnectJob?.cancel()
+        reconnectAttempt = 0
+        allowAutomaticReconnect = true
         val current = _uiState.value
         if (current is GameUiState.Connecting || current is GameUiState.Lobby || current is GameUiState.Playing) {
             val savedToken = resumeToken ?: loadResumeToken(roomCode, lastServerUrl)
@@ -507,8 +627,33 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun exitToHome() {
-        leaveCurrentRoom()
+        disconnectPreservingResume()
         _uiState.value = homeState()
+    }
+
+    fun resumeSavedRoom() {
+        val record = loadResumeRecord() ?: run {
+            _toast.value = "没有可恢复的牌局"
+            _uiState.value = homeState()
+            return
+        }
+        val session = authSession ?: return showAuth()
+        if (record.accountId != session.accountId) {
+            clearResumeRecord()
+            _toast.value = "恢复信息不属于当前账号"
+            _uiState.value = homeState()
+            return
+        }
+        roomCode = record.roomCode
+        resumeToken = record.resumeToken
+        lastServerUrl = record.serverUrl
+        connect(
+            nickname = session.nickname,
+            serverUrl = record.serverUrl,
+            host = false,
+            room = record.roomCode,
+            resumeCredential = record.resumeToken
+        )
     }
 
     fun call(want: Boolean) {
@@ -559,10 +704,18 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     private fun homeState(): GameUiState.Home {
         val session = authSession
+        val resumableRoom = session?.let { loadResumeRecordFor(it.accountId)?.roomCode }
         return if (session == null) {
             GameUiState.Home("", lastServerUrl, connection, voiceEnabled)
         } else {
-            GameUiState.Home(session.nickname, lastServerUrl, connection, voiceEnabled)
+            GameUiState.Home(
+                nickname = session.nickname,
+                serverUrl = lastServerUrl,
+                connection = connection,
+                voiceEnabled = voiceEnabled,
+                resumeRoomCode = resumableRoom,
+                isAdmin = authVerifiedThisProcess && session.isAdmin
+            )
         }
     }
 
@@ -574,6 +727,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         resumeCredential: String? = null
     ) {
         val session = authSession ?: return showAuth()
+        reconnectJob?.cancel()
+        allowAutomaticReconnect = true
         val cleanName = session.nickname.ifBlank { nickname.trim().ifBlank { "朋友" } }
         val cleanUrl = normalizeWebSocketUrl(serverUrl)
         lastServerUrl = cleanUrl.removeSuffix("/ws")
@@ -587,112 +742,144 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             canRetry = false
         )
         onlineClient?.close()
-        onlineClient = OnlineClient(
+        var nextClient: OnlineClient? = null
+        nextClient = OnlineClient(
             serverUrl = cleanUrl,
             name = cleanName,
             playerId = session.accountId.ifBlank { legacyPlayerId },
             authToken = session.authToken,
             onRoom = { code, seat, hostSeat, token, players, aiCount, requiredHumans ->
-                if (voiceRoomCode != code) {
-                    voiceRoomCode = code
-                    voiceEventReducer.reset(
-                        roomCode = code,
-                        suppressNextSnapshot = !resumeCredential.isNullOrBlank()
-                    )
-                }
-                roomCode = code
-                mySeat = seat
-                this@DoudizhuViewModel.resumeToken = token
-                if (!token.isNullOrBlank()) saveResumeToken(code, cleanUrl, token)
-                isHost = seat == hostSeat
-                playerNames = players
-                config = config.copy(humanCount = requiredHumans.coerceIn(1, 3)).normalized()
-                connection = AppConnectionState.ONLINE
-                val current = _uiState.value
-                _uiState.value = if (current is GameUiState.Playing) {
-                    current.copy(
-                        config = config,
-                        mySeat = seat,
-                        roomCode = code,
-                        players = players,
-                        isHost = isHost,
-                        connection = connection
-                    )
-                } else {
-                    GameUiState.Lobby(
-                        config = config,
-                        roomCode = code,
-                        yourSeat = seat,
-                        players = players,
-                        aiCount = aiCount,
-                        requiredHumans = requiredHumans,
-                        isHost = isHost
-                    )
+                if (onlineClient === nextClient) {
+                    if (voiceRoomCode != code) {
+                        voiceRoomCode = code
+                        voiceEventReducer.reset(
+                            roomCode = code,
+                            suppressNextSnapshot = !resumeCredential.isNullOrBlank()
+                        )
+                    }
+                    roomCode = code
+                    mySeat = seat
+                    this@DoudizhuViewModel.resumeToken = token
+                    if (!token.isNullOrBlank()) {
+                        saveResumeToken(code, lastServerUrl, token)
+                        saveResumeRecord(
+                            ResumeRecord(
+                                roomCode = code,
+                                resumeToken = token,
+                                serverUrl = lastServerUrl,
+                                accountId = session.accountId,
+                                savedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                    isHost = seat == hostSeat
+                    playerNames = players
+                    config = config.copy(humanCount = requiredHumans.coerceIn(1, 3)).normalized()
+                    connection = AppConnectionState.ONLINE
+                    reconnectAttempt = 0
+                    val current = _uiState.value
+                    _uiState.value = if (current is GameUiState.Playing) {
+                        current.copy(
+                            config = config,
+                            mySeat = seat,
+                            roomCode = code,
+                            players = players,
+                            isHost = isHost,
+                            connection = connection
+                        )
+                    } else {
+                        GameUiState.Lobby(
+                            config = config,
+                            roomCode = code,
+                            yourSeat = seat,
+                            players = players,
+                            aiCount = aiCount,
+                            requiredHumans = requiredHumans,
+                            isHost = isHost
+                        )
+                    }
                 }
             },
             onState = { state ->
-                connection = AppConnectionState.ONLINE
-                if (voiceEnabled) {
-                    voiceEventReducer.reduce(roomCode, state, mySeat).forEach(_audioCues::tryEmit)
-                } else {
-                    voiceEventReducer.reduce(roomCode, state, mySeat)
-                }
-                if (state.phase.name == "FINISHED" && state.gameNumber != lastRecordedGame) {
-                    lastRecordedGame = state.gameNumber
-                    saveHistory(state)
-                }
-                _uiState.value = GameUiState.Playing(
-                    config = config,
-                    state = state,
-                    mySeat = mySeat,
-                    roomCode = roomCode,
-                    players = playerNames,
-                    isHost = isHost,
-                    voiceEnabled = voiceEnabled
-                )
-            },
-            onError = { message ->
-                _toast.value = message
-            },
-            onConnection = { state ->
-                if (state == ConnectionState.RECONNECTING ||
-                    state == ConnectionState.CLOSED ||
-                    state == ConnectionState.FAILED
-                ) {
-                    voiceEventReducer.suppressNextSnapshot()
-                }
-                connection = when (state) {
-                    ConnectionState.CONNECTING -> AppConnectionState.CONNECTING
-                    ConnectionState.OPEN -> AppConnectionState.ONLINE
-                    ConnectionState.RECONNECTING -> AppConnectionState.RECONNECTING
-                    ConnectionState.CLOSED, ConnectionState.FAILED -> AppConnectionState.RECONNECTING
-                }
-                val current = _uiState.value
-                if (current is GameUiState.Lobby) {
-                    _uiState.value = current.copy(connection = connection)
-                } else if (current is GameUiState.Playing) {
-                    _uiState.value = current.copy(connection = connection)
-                } else if (current is GameUiState.Connecting && state == ConnectionState.FAILED) {
-                    _uiState.value = current.copy(
-                        message = "连接失败，请检查服务器地址后重试",
-                        canRetry = true
+                if (onlineClient === nextClient) {
+                    connection = AppConnectionState.ONLINE
+                    reconnectAttempt = 0
+                    if (voiceEnabled) {
+                        voiceEventReducer.reduce(roomCode, state, mySeat)
+                            .forEach(_audioCues::tryEmit)
+                    } else {
+                        voiceEventReducer.reduce(roomCode, state, mySeat)
+                    }
+                    _uiState.value = GameUiState.Playing(
+                        config = config,
+                        state = state,
+                        mySeat = mySeat,
+                        roomCode = roomCode,
+                        players = playerNames,
+                        isHost = isHost,
+                        voiceEnabled = voiceEnabled
                     )
                 }
+            },
+            onServerError = { error ->
+                if (onlineClient === nextClient) handleServerError(error)
+            },
+            onConnection = { state ->
+                if (onlineClient === nextClient) {
+                    if (state == ConnectionState.RECONNECTING ||
+                        state == ConnectionState.CLOSED ||
+                        state == ConnectionState.FAILED
+                    ) {
+                        voiceEventReducer.suppressNextSnapshot()
+                    }
+                    connection = when (state) {
+                        ConnectionState.CONNECTING -> AppConnectionState.CONNECTING
+                        ConnectionState.OPEN -> AppConnectionState.ONLINE
+                        ConnectionState.RECONNECTING -> AppConnectionState.RECONNECTING
+                        ConnectionState.CLOSED, ConnectionState.FAILED ->
+                            AppConnectionState.RECONNECTING
+                    }
+                    val current = _uiState.value
+                    if (current is GameUiState.Lobby) {
+                        _uiState.value = current.copy(connection = connection)
+                    } else if (current is GameUiState.Playing) {
+                        _uiState.value = current.copy(connection = connection)
+                    } else if (current is GameUiState.Connecting &&
+                        state == ConnectionState.FAILED
+                    ) {
+                        _uiState.value = current.copy(
+                            message = "连接失败，请检查服务器地址后重试",
+                            canRetry = true
+                        )
+                    }
+                    if (
+                        allowAutomaticReconnect &&
+                        (state == ConnectionState.CLOSED ||
+                            state == ConnectionState.FAILED ||
+                            state == ConnectionState.RECONNECTING)
+                    ) {
+                        scheduleAutomaticReconnect()
+                    }
+                }
             }
-        ).also { client ->
-            client.connect {
+        )
+        onlineClient = nextClient
+        nextClient.connect {
+            if (onlineClient === nextClient) {
                 if (!resumeCredential.isNullOrBlank() && room != null) {
-                    client.reconnectRoom(room, resumeCredential)
+                    nextClient.reconnectRoom(room, resumeCredential)
                 } else if (room == null) {
-                    client.createRoom(config.difficulty, config.aiCount)
+                    nextClient.createRoom(config.difficulty, config.aiCount)
                 } else {
-                    client.joinRoom(room)
+                    nextClient.joinRoom(room)
                 }
             }
         }
     }
 
     private fun leaveCurrentRoom() {
+        reconnectJob?.cancel()
+        allowAutomaticReconnect = false
         val oldRoom = roomCode
         val oldUrl = lastServerUrl
         onlineClient?.leaveRoom()
@@ -701,12 +888,69 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         if (oldRoom.isNotBlank()) {
             preferences.edit().remove(resumeKey(oldRoom, oldUrl)).apply()
         }
+        clearResumeRecord()
         resumeToken = null
         roomCode = ""
         voiceRoomCode = ""
         voiceEventReducer.reset("")
         lastRequestedRoom = null
         connection = AppConnectionState.OFFLINE
+    }
+
+    private fun disconnectPreservingResume() {
+        reconnectJob?.cancel()
+        allowAutomaticReconnect = false
+        onlineClient?.close()
+        onlineClient = null
+        connection = AppConnectionState.OFFLINE
+        voiceEventReducer.suppressNextSnapshot()
+    }
+
+    private fun scheduleAutomaticReconnect() {
+        if (reconnectJob?.isActive == true || reconnectAttempt >= RECONNECT_DELAYS_MS.size) return
+        val token = resumeToken ?: loadResumeRecord()?.resumeToken ?: return
+        val targetRoom = roomCode.ifBlank { loadResumeRecord()?.roomCode.orEmpty() }
+        if (targetRoom.isBlank()) return
+        val delayMs = RECONNECT_DELAYS_MS[reconnectAttempt++]
+        reconnectJob = viewModelScope.launch {
+            delay(delayMs)
+            if (!allowAutomaticReconnect) return@launch
+            connect(
+                nickname = authSession?.nickname.orEmpty(),
+                serverUrl = lastServerUrl,
+                host = isHost,
+                room = targetRoom,
+                resumeCredential = token
+            )
+        }
+    }
+
+    private fun handleServerError(error: ServerError) {
+        when (error.code?.uppercase()) {
+            "AUTH_REQUIRED", "UNAUTHORIZED", "INVALID_TOKEN" -> handleAuthenticationExpired()
+            "ROOM_NOT_FOUND", "RESUME_DENIED" -> {
+                reconnectJob?.cancel()
+                allowAutomaticReconnect = false
+                clearResumeRecord()
+                resumeToken = null
+                roomCode = ""
+                onlineClient?.close()
+                onlineClient = null
+                connection = AppConnectionState.OFFLINE
+                _toast.value = error.message
+                _uiState.value = homeState()
+            }
+            else -> _toast.value = error.message
+        }
+    }
+
+    private fun handleAuthenticationExpired() {
+        reconnectJob?.cancel()
+        allowAutomaticReconnect = false
+        onlineClient?.close()
+        onlineClient = null
+        clearAuthSession()
+        showAuth("登录已过期，请重新登录")
     }
 
     private fun hasActiveRoom(): Boolean {
@@ -722,6 +966,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             .putString("authToken", session.authToken)
             .putString("accountId", session.accountId)
             .putString("nickname", session.nickname)
+            .putString("accountRole", session.role.name)
+            .putBoolean("isAdmin", session.isAdmin)
             .apply()
     }
 
@@ -732,61 +978,28 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         return if (token.isBlank() || accountId.isBlank() || nickname.isBlank()) {
             null
         } else {
-            AuthSession(token, accountId, nickname)
+            AuthSession(
+                authToken = token,
+                accountId = accountId,
+                nickname = nickname,
+                role = com.loves.doudizhu.network.AccountRole.from(
+                    preferences.getString("accountRole", null)
+                ),
+                isAdmin = preferences.getBoolean("isAdmin", false)
+            )
         }
     }
 
     private fun clearAuthSession() {
+        authVerifiedThisProcess = false
         authSession = null
         preferences.edit()
             .remove("authToken")
             .remove("accountId")
             .remove("nickname")
+            .remove("accountRole")
+            .remove("isAdmin")
             .apply()
-    }
-
-    private fun saveHistory(state: EngineState) {
-        val entry = JSONObject().apply {
-            put("time", System.currentTimeMillis())
-            put("roomCode", roomCode)
-            put("winner", state.seats.getOrNull(state.winnerIndex ?: -1)?.name ?: "未知")
-            put("multiplier", state.multiplier)
-            put("scoreDelta", JSONArray().apply { state.scoreDelta.forEach(::put) })
-            put("players", JSONArray().apply { playerNames.forEach(::put) })
-        }
-        val entries = JSONArray(preferences.getString("history", "[]"))
-        val updated = JSONArray().apply {
-            put(entry)
-            for (index in 0 until minOf(entries.length(), 19)) put(entries.getJSONObject(index))
-        }
-        preferences.edit().putString("history", updated.toString()).apply()
-    }
-
-    private fun loadHistory(): List<HistoryEntry> {
-        val entries = runCatching {
-            JSONArray(preferences.getString("history", "[]"))
-        }.getOrElse { JSONArray() }
-        return buildList {
-            for (index in 0 until entries.length()) {
-                val item = entries.optJSONObject(index) ?: continue
-                val deltas = item.optJSONArray("scoreDelta")
-                val players = item.optJSONArray("players")
-                add(
-                    HistoryEntry(
-                        time = item.optLong("time"),
-                        roomCode = item.optString("roomCode"),
-                        winner = item.optString("winner"),
-                        multiplier = item.optInt("multiplier", 1),
-                        scoreDelta = if (deltas == null) emptyList() else {
-                            List(deltas.length()) { deltas.optInt(it) }
-                        },
-                        players = if (players == null) emptyList() else {
-                            List(players.length()) { players.optString(it) }
-                        }
-                    )
-                )
-            }
-        }
     }
 
     private fun normalizeServerBase(url: String): String {
@@ -825,9 +1038,64 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         return preferences.getString(resumeKey(room, serverUrl), null)
     }
 
+    private fun saveResumeRecord(record: ResumeRecord) {
+        preferences.edit()
+            .putString("resumeRoomCode", record.roomCode)
+            .putString("resumeCredential", record.resumeToken)
+            .putString("resumeServerUrl", record.serverUrl)
+            .putString("resumeAccountId", record.accountId)
+            .putLong("resumeSavedAt", record.savedAt)
+            .apply()
+    }
+
+    private fun loadResumeRecord(): ResumeRecord? {
+        val room = preferences.getString("resumeRoomCode", null).orEmpty()
+        val token = preferences.getString("resumeCredential", null).orEmpty()
+        val server = preferences.getString("resumeServerUrl", null).orEmpty()
+        val account = preferences.getString("resumeAccountId", null).orEmpty()
+        if (room.length != 6 || token.isBlank() || server.isBlank() || account.isBlank()) return null
+        return ResumeRecord(
+            roomCode = room,
+            resumeToken = token,
+            serverUrl = server,
+            accountId = account,
+            savedAt = preferences.getLong("resumeSavedAt", 0L)
+        )
+    }
+
+    private fun loadResumeRecordFor(accountId: String): ResumeRecord? {
+        return loadResumeRecord()?.takeIf { it.accountId == accountId }
+    }
+
+    private fun clearResumeRecord() {
+        val record = loadResumeRecord()
+        val editor = preferences.edit()
+            .remove("resumeRoomCode")
+            .remove("resumeCredential")
+            .remove("resumeServerUrl")
+            .remove("resumeAccountId")
+            .remove("resumeSavedAt")
+        if (record != null) {
+            editor.remove(resumeKey(record.roomCode, record.serverUrl))
+            editor.remove(resumeKey(record.roomCode, normalizeWebSocketUrl(record.serverUrl)))
+        }
+        editor.apply()
+    }
+
     override fun onCleared() {
+        reconnectJob?.cancel()
         onlineClient?.close()
         onlineClient = null
         super.onCleared()
     }
 }
+
+private data class ResumeRecord(
+    val roomCode: String,
+    val resumeToken: String,
+    val serverUrl: String,
+    val accountId: String,
+    val savedAt: Long
+)
+
+private val RECONNECT_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)

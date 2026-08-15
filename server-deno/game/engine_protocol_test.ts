@@ -36,6 +36,7 @@ function playingState(): EngineState {
     passes: 0,
     bottomCards: [card(7), card(8), card(9)],
     multiplier: 1,
+    seenRanks: {},
     winnerIndex: null,
     scoreDelta: [],
     message: "",
@@ -107,6 +108,40 @@ Deno.test("submitPlay 返回服务器确认的权威牌型", () => {
     pattern.length !== 1
   ) {
     throw new Error("submitPlay 未返回准确的服务器牌型");
+  }
+});
+
+Deno.test("公开记牌只累计服务器确认出过的牌", () => {
+  const engine = new DoudizhuEngine({ humanCount: 3, difficulty: "MEDIUM" });
+  engine.state = playingState();
+
+  engine.submitPlay([card(3)]);
+  engine.submitPlay([card(5)]);
+
+  if (engine.state.seenRanks[3] !== 1 || engine.state.seenRanks[5] !== 1) {
+    throw new Error("已确认出牌没有正确累计到公开记牌");
+  }
+  if (engine.state.seenRanks[4] !== undefined) {
+    throw new Error("公开记牌不应包含仍在手牌中的隐藏牌");
+  }
+});
+
+Deno.test("协议往返保留公开记牌并兼容旧快照", () => {
+  const state = playingState();
+  state.seenRanks = { 3: 2, 15: 1, 17: 1 };
+  const serialized = serializeState(state, 0);
+  const decoded = deserializeState(serialized);
+  if (
+    decoded.seenRanks[3] !== 2 ||
+    decoded.seenRanks[15] !== 1 ||
+    decoded.seenRanks[17] !== 1
+  ) {
+    throw new Error("公开记牌协议往返失败");
+  }
+
+  delete serialized.seenRanks;
+  if (Object.keys(deserializeState(serialized).seenRanks).length !== 0) {
+    throw new Error("旧快照缺少公开记牌时应兼容为空");
   }
 });
 

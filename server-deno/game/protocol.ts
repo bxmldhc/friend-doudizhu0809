@@ -24,7 +24,7 @@ export type ClientMessage =
     playerId?: string;
     authToken?: string;
   }
-  | { type: "RECONNECT"; room: string; token: string }
+  | { type: "RECONNECT"; room: string; token: string; authToken?: string }
   | { type: "START" }
   | { type: "RESTART" }
   | { type: "READY"; ready: boolean }
@@ -123,6 +123,7 @@ export function serializeState(
       ? []
       : state.bottomCards.map(cardNotation),
     multiplier: state.multiplier,
+    seenRanks: state.seenRanks,
     winnerIndex: state.winnerIndex,
     scoreDelta: state.scoreDelta,
     message: state.message,
@@ -186,9 +187,29 @@ export function deserializeState(obj: Record<string, unknown>): EngineState {
       Array.isArray(obj.bottomCards) ? obj.bottomCards as string[] : [],
     ),
     multiplier: obj.multiplier as number,
+    seenRanks: parseSeenRanks(obj.seenRanks),
     winnerIndex: obj.winnerIndex as number | null,
     scoreDelta: obj.scoreDelta as number[],
     message: obj.message as string,
     gameNumber: obj.gameNumber as number,
   };
+}
+
+function parseSeenRanks(value: unknown): Record<number, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<number, number> = {};
+  for (const [rank, count] of Object.entries(value)) {
+    const parsedRank = Number(rank);
+    if (
+      Number.isInteger(parsedRank) &&
+      parsedRank >= 3 &&
+      parsedRank <= 17 &&
+      typeof count === "number" &&
+      Number.isInteger(count) &&
+      count > 0
+    ) {
+      result[parsedRank] = count;
+    }
+  }
+  return result;
 }

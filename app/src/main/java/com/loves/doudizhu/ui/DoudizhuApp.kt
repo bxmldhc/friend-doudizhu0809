@@ -87,6 +87,8 @@ fun DoudizhuApp(
                     onCreate = viewModel::openCreateRoom,
                     onJoin = viewModel::openJoinRoom,
                     onHistory = viewModel::openHistory,
+                    onResume = viewModel::resumeSavedRoom,
+                    onAdmin = viewModel::openAdmin,
                     onLogout = viewModel::logout,
                     onVoiceEnabledChange = viewModel::setVoiceEnabled,
                     onCheckUpdate = { viewModel.checkForUpdates() }
@@ -132,11 +134,18 @@ fun DoudizhuApp(
                     onDismissPlayerProfile = viewModel::dismissPlayerProfile
                 )
                 is GameUiState.History -> HistoryScreen(
-                    entries = state.entries,
                     stats = state.stats,
                     loading = state.loading,
                     error = state.error,
-                    onBack = viewModel::backHome
+                    onBack = viewModel::backHome,
+                    onRetry = viewModel::retryHistory
+                )
+                is GameUiState.Admin -> AdminScreen(
+                    state = state,
+                    onBack = viewModel::backHome,
+                    onRetry = viewModel::retryAdmin,
+                    onSearch = viewModel::searchAdminAccounts,
+                    onResetPassword = viewModel::resetAdminPassword
                 )
             }
             SnackbarHost(hostState = snackbarHostState)

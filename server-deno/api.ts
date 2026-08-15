@@ -1,14 +1,30 @@
 import {
   AuthError,
+  countAccounts,
   getPublicAccount,
+  listAccountsForAdmin,
   loginAccount,
   logoutSession,
   registerAccount,
+  resetAccountPassword,
   resolveSession,
 } from "./game/auth.ts";
-import { getStats } from "./game/store.ts";
+import type { AdminRoomOverview, AdminRoomSnapshot } from "./game/rooms.ts";
+import { getRecentMatches, getStats } from "./game/store.ts";
 
-export async function handleApiRequest(req: Request): Promise<Response | null> {
+export interface AdminRoomReader {
+  getAdminOverview(): AdminRoomOverview;
+  getAdminRoomSnapshots(): AdminRoomSnapshot[];
+}
+
+export interface ApiDependencies {
+  roomManager?: AdminRoomReader;
+}
+
+export async function handleApiRequest(
+  req: Request,
+  dependencies: ApiDependencies = {},
+): Promise<Response | null> {
   const url = new URL(req.url);
   if (!url.pathname.startsWith("/api/")) return null;
 
@@ -38,7 +54,10 @@ export async function handleApiRequest(req: Request): Promise<Response | null> {
     }
     if (req.method === "GET" && url.pathname === "/api/stats/me") {
       const { account } = await requireAccount(req);
-      const stored = await getStats(account.accountId);
+      const [stored, recentMatches] = await Promise.all([
+        getStats(account.accountId),
+        getRecentMatches(account.accountId),
+      ]);
       return json({
         ok: true,
         data: {
@@ -47,7 +66,75 @@ export async function handleApiRequest(req: Request): Promise<Response | null> {
           totalScore: stored?.totalScore ?? 0,
           games: stored?.games ?? 0,
           wins: stored?.wins ?? 0,
+          recentMatches,
         },
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/admin/overview") {
+      await requireAdmin(req);
+      const roomManager = requireRoomManager(dependencies);
+      const [accountCount, roomOverview] = await Promise.all([
+        countAccounts(),
+        Promise.resolve(roomManager.getAdminOverview()),
+      ]);
+      return json({
+        ok: true,
+        data: {
+          accountCount,
+          ...roomOverview,
+        },
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/admin/accounts") {
+      await requireAdmin(req);
+      const query = url.searchParams.get("query") ?? "";
+      const limit = parseLimit(url.searchParams.get("limit"));
+      const result = await listAccountsForAdmin(query, limit);
+      const accounts = await Promise.all(
+        result.accounts.map(async (account) => {
+          const stats = await getStats(account.accountId);
+          return {
+            ...account,
+            totalScore: stats?.totalScore ?? 0,
+            games: stats?.games ?? 0,
+            wins: stats?.wins ?? 0,
+          };
+        }),
+      );
+      return json({
+        ok: true,
+        data: {
+          accounts,
+          total: result.total,
+          limit: result.limit,
+          query: result.query,
+        },
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/admin/rooms") {
+      await requireAdmin(req);
+      const roomManager = requireRoomManager(dependencies);
+      return json({
+        ok: true,
+        data: {
+          rooms: roomManager.getAdminRoomSnapshots(),
+        },
+      });
+    }
+    const resetPasswordMatch = url.pathname.match(
+      /^\/api\/admin\/accounts\/([^/]+)\/reset-password$/,
+    );
+    if (req.method === "POST" && resetPasswordMatch) {
+      await requireAdmin(req);
+      const accountId = decodePathSegment(resetPasswordMatch[1]);
+      const body = await readJsonObject(req);
+      const account = await resetAccountPassword(
+        accountId,
+        String(body.password ?? body.newPassword ?? ""),
+      );
+      return json({
+        ok: true,
+        data: { account, sessionsInvalidated: true },
       });
     }
     const playerStatsMatch = url.pathname.match(
@@ -116,7 +203,7 @@ async function readCredentials(req: Request): Promise<{
   nickname: string;
   password: string;
 }> {
-  const body = await req.json() as Record<string, unknown>;
+  const body = await readJsonObject(req);
   return {
     nickname: String(body.nickname ?? ""),
     password: String(body.password ?? ""),
@@ -130,6 +217,38 @@ async function requireAccount(req: Request) {
     throw new AuthError("登录已失效，请重新登录", "AUTH_REQUIRED", 401);
   }
   return { token, account };
+}
+
+async function requireAdmin(req: Request) {
+  const session = await requireAccount(req);
+  if (!session.account.isAdmin) {
+    throw new AuthError("需要管理员权限", "ADMIN_REQUIRED", 403);
+  }
+  return session;
+}
+
+function requireRoomManager(dependencies: ApiDependencies): AdminRoomReader {
+  if (!dependencies.roomManager) {
+    throw new Error("Room manager dependency is not configured");
+  }
+  return dependencies.roomManager;
+}
+
+async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
+  const body = await req.json();
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new SyntaxError("Request body must be a JSON object");
+  }
+  return body as Record<string, unknown>;
+}
+
+function parseLimit(value: string | null): number {
+  if (value === null || value.trim() === "") return 100;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new AuthError("limit 必须是正整数", "INVALID_LIMIT");
+  }
+  return Math.min(parsed, 100);
 }
 
 function bearerToken(req: Request): string {

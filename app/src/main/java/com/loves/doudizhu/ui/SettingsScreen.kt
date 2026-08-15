@@ -23,8 +23,10 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -93,6 +95,8 @@ fun HomeScreen(
     onCreate: () -> Unit,
     onJoin: () -> Unit,
     onHistory: () -> Unit,
+    onResume: () -> Unit,
+    onAdmin: () -> Unit,
     onLogout: () -> Unit,
     onVoiceEnabledChange: (Boolean) -> Unit,
     onCheckUpdate: () -> Unit
@@ -134,6 +138,21 @@ fun HomeScreen(
                 }
                 OutlinedButton(onClick = onJoin, modifier = Modifier.height(52.dp)) {
                     Text("加入房间", fontWeight = FontWeight.Bold)
+                }
+            }
+            state.resumeRoomCode?.let { room ->
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = onResume,
+                    modifier = Modifier.height(50.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Wax,
+                        contentColor = PageBg
+                    )
+                ) {
+                    Icon(Icons.Default.Restore, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("恢复房间 $room", fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.height(20.dp))
@@ -183,6 +202,17 @@ fun HomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Bottom
         ) {
+            if (state.isAdmin) {
+                IconButton(onClick = onAdmin, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        Icons.Default.AdminPanelSettings,
+                        contentDescription = "超级管理入口",
+                        tint = Wax
+                    )
+                }
+                Text("管理", color = Muted, fontSize = 11.sp)
+                Spacer(Modifier.height(12.dp))
+            }
             IconButton(onClick = onHistory, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
             }
@@ -507,7 +537,7 @@ private fun RoomForm(
                                         aiCount = option
                                         error = null
                                     },
-                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    modifier = Modifier.weight(1f).height(48.dp),
                                     colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                                         containerColor = if (selected) Coral else Color.Transparent,
                                         contentColor = if (selected) Color.White else Muted

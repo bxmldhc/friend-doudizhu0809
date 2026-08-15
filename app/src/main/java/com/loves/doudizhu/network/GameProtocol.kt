@@ -11,6 +11,11 @@ sealed interface RemoteAction {
     data object Pass : RemoteAction
 }
 
+data class ServerError(
+    val code: String? = null,
+    val message: String
+)
+
 sealed interface NetMessage {
     data class Room(
         val roomCode: String,
@@ -22,7 +27,12 @@ sealed interface NetMessage {
         val requiredHumans: Int
     ) : NetMessage
     data class State(val state: EngineState) : NetMessage
-    data class Error(val message: String, val code: String? = null) : NetMessage
+    data class Error(val error: ServerError) : NetMessage {
+        val code: String?
+            get() = error.code
+        val message: String
+            get() = error.message
+    }
     data object Pong : NetMessage
 }
 
@@ -55,11 +65,12 @@ object GameProtocol {
         return obj.toString()
     }
 
-    fun encodeReconnect(room: String, token: String): String {
+    fun encodeReconnect(room: String, token: String, authToken: String?): String {
         val obj = JSONObject()
         obj.put("type", "RECONNECT")
         obj.put("room", room)
         obj.put("token", token)
+        if (!authToken.isNullOrBlank()) obj.put("authToken", authToken)
         return obj.toString()
     }
 
@@ -113,10 +124,16 @@ object GameProtocol {
             "STATE" -> NetMessage.State(
                 GameCodec.decodeState(obj.getJSONObject("state").toString())
             )
-            "ERROR" -> NetMessage.Error(
-                message = obj.optString("message", "未知错误"),
-                code = obj.optString("code").ifBlank { null }
-            )
+            "ERROR" -> {
+                val details = obj.optJSONObject("error")
+                val message = details?.optString("message")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: obj.optString("message", "未知错误")
+                val code = details?.optString("code")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: obj.optString("code").ifBlank { null }
+                NetMessage.Error(ServerError(code = code, message = message))
+            }
             "PONG" -> NetMessage.Pong
             else -> throw IllegalArgumentException("无法识别的服务器消息")
         }

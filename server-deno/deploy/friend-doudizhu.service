@@ -11,6 +11,10 @@ WorkingDirectory=/opt/friend-doudizhu-server
 Environment=PORT=18080
 Environment=DENO_KV_PATH=/var/lib/friend-doudizhu/game.db
 Environment=APP_RELEASES_DIR=/opt/friend-doudizhu-server/releases
+# 管理员权限只能由服务端配置。生产环境优先填写稳定的账号 ID。
+Environment=ADMIN_ACCOUNT_IDS=
+# 昵称白名单只用于首次迁移；生产环境确认 accountId 后应保持为空。
+Environment=ADMIN_NICKNAMES=
 ExecStart=/home/admin/.deno/bin/deno task start
 Restart=on-failure
 RestartSec=3

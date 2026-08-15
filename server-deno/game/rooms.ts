@@ -14,6 +14,8 @@ import { Pattern } from "./hand.ts";
 
 interface Room {
   code: string;
+  matchId: string;
+  startedAt: number;
   sockets: (WebSocket | null)[];
   resumeTokens: (string | null)[];
   playerIds: (string | null)[];
@@ -43,6 +45,43 @@ interface RoomParticipant {
   joinedAt: number;
 }
 
+export interface AdminRoomSeatSnapshot {
+  seat: number;
+  name: string;
+  isAi: boolean;
+  isConnected: boolean;
+  isAway: boolean;
+  isHost: boolean;
+}
+
+export interface AdminRoomSnapshot {
+  roomCode: string;
+  createdAt: number;
+  phase: "WAITING" | "BIDDING" | "PLAYING" | "FINISHED";
+  gameNumber: number;
+  difficulty: Difficulty;
+  aiCount: number;
+  connectedHumanCount: number;
+  occupiedHumanCount: number;
+  hostSeat: number;
+  hostName: string | null;
+  seats: AdminRoomSeatSnapshot[];
+}
+
+export interface AdminRoomOverview {
+  roomCount: number;
+  activeGameCount: number;
+  connectedHumanCount: number;
+  occupiedHumanCount: number;
+  aiCount: number;
+}
+
+interface RoomOperationResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+}
+
 const AI_NAMES = ["小智", "阿强", "老K"];
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 
@@ -56,9 +95,15 @@ function send(ws: WebSocket, obj: unknown) {
   }
 }
 
+function sendError(ws: WebSocket, code: string, message: string) {
+  send(ws, { type: "ERROR", code, message });
+}
+
 export class RoomManager {
   private rooms = new Map<string, Room>();
   private socketRoom = new WeakMap<WebSocket, string>();
+  private socketAuthTokens = new WeakMap<WebSocket, string>();
+  private socketAccountIds = new WeakMap<WebSocket, string>();
 
   constructor(
     private options: {
@@ -105,6 +150,8 @@ export class RoomManager {
     }
     const room: Room = {
       code,
+      matchId: crypto.randomUUID(),
+      startedAt: Date.now(),
       sockets: [ws, null, null],
       resumeTokens: [crypto.randomUUID(), null, null],
       playerIds,
@@ -136,21 +183,33 @@ export class RoomManager {
     name: string,
     requestedPlayerId = "",
     isAuthenticated = false,
-  ): { ok: boolean; message?: string } {
+  ): RoomOperationResult {
     const room = this.rooms.get(code);
-    if (!room) return { ok: false, message: "房间不存在" };
+    if (!room) {
+      return { ok: false, code: "ROOM_NOT_FOUND", message: "房间不存在" };
+    }
     if (room.engine && room.engine.state.phase !== "FINISHED") {
-      return { ok: false, message: "游戏已经开始，不能加入" };
+      return {
+        ok: false,
+        code: "GAME_ALREADY_STARTED",
+        message: "游戏已经开始，不能加入",
+      };
     }
     const humanCount = room.sockets.filter((s) => s !== null).length;
     if (humanCount >= 3 - room.aiCount) {
-      return { ok: false, message: "当前房间真人人数已满" };
+      return {
+        ok: false,
+        code: "ROOM_FULL",
+        message: "当前房间真人人数已满",
+      };
     }
     const requiredHumans = 3 - room.aiCount;
     const seat = room.sockets.findIndex((s, i) =>
       i < requiredHumans && s === null
     );
-    if (seat < 0) return { ok: false, message: "房间已满" };
+    if (seat < 0) {
+      return { ok: false, code: "ROOM_FULL", message: "房间已满" };
+    }
     const stablePlayerId = this.normalizePlayerId(requestedPlayerId);
     if (
       stablePlayerId &&
@@ -158,7 +217,11 @@ export class RoomManager {
         playerId === stablePlayerId && room.sockets[index] !== null
       )
     ) {
-      return { ok: false, message: "该玩家已经在房间中" };
+      return {
+        ok: false,
+        code: "INVALID_ACTION",
+        message: "该玩家已经在房间中",
+      };
     }
     const participant = stablePlayerId
       ? room.participants.get(stablePlayerId) ??
@@ -186,17 +249,38 @@ export class RoomManager {
     ws: WebSocket,
     code: string,
     token: string,
-  ): { ok: boolean; message?: string } {
+    expectedPlayerId = "",
+  ): RoomOperationResult {
     const room = this.rooms.get(code);
-    if (!room) return { ok: false, message: "房间不存在" };
+    if (!room) {
+      return { ok: false, code: "ROOM_NOT_FOUND", message: "房间不存在" };
+    }
     const seat = room.resumeTokens.findIndex((value) =>
       value === token && value !== null
     );
-    if (seat < 0) return { ok: false, message: "恢复凭证无效，无法认领原座位" };
+    if (seat < 0) {
+      return {
+        ok: false,
+        code: "RESUME_DENIED",
+        message: "恢复凭证无效，无法认领原座位",
+      };
+    }
+    if (
+      expectedPlayerId &&
+      room.playerIds[seat] !== expectedPlayerId
+    ) {
+      return {
+        ok: false,
+        code: "RESUME_DENIED",
+        message: "当前账号不能认领该座位",
+      };
+    }
 
     const previousSocket = room.sockets[seat];
     if (previousSocket && previousSocket !== ws) {
       this.socketRoom.delete(previousSocket);
+      this.socketAuthTokens.delete(previousSocket);
+      this.socketAccountIds.delete(previousSocket);
       try {
         previousSocket.close(4001, "座位已在另一台设备恢复");
       } catch {
@@ -230,9 +314,12 @@ export class RoomManager {
 
   start(ws: WebSocket) {
     const room = this.getRoomBySocket(ws);
-    if (!room) return;
+    if (!room) {
+      sendError(ws, "INVALID_ACTION", "当前连接不在房间中");
+      return;
+    }
     if (room.sockets[room.hostSeat] !== ws) {
-      send(ws, { type: "ERROR", message: "只有房主可以开始" });
+      sendError(ws, "NOT_HOST", "只有房主可以开始");
       return;
     }
     if (!this.validateStartPlayers(room, ws)) return;
@@ -250,13 +337,16 @@ export class RoomManager {
 
   restart(ws: WebSocket) {
     const room = this.getRoomBySocket(ws);
-    if (!room || !room.engine) return;
+    if (!room || !room.engine) {
+      sendError(ws, "INVALID_ACTION", "当前房间没有可重开的牌局");
+      return;
+    }
     if (room.sockets[room.hostSeat] !== ws) {
-      send(ws, { type: "ERROR", message: "只有房主可以重开" });
+      sendError(ws, "NOT_HOST", "只有房主可以重开");
       return;
     }
     if (room.engine.state.phase !== "FINISHED") {
-      send(ws, { type: "ERROR", message: "当前牌局尚未结束" });
+      sendError(ws, "INVALID_ACTION", "当前牌局尚未结束");
       return;
     }
     if (!this.validateStartPlayers(room, ws)) return;
@@ -269,7 +359,7 @@ export class RoomManager {
           room.sockets[seat] === null || ready;
       })
     ) {
-      send(ws, { type: "ERROR", message: "请等待所有玩家准备" });
+      sendError(ws, "NOT_READY", "请等待所有玩家准备");
       return;
     }
     room.engine.startNewGame();
@@ -281,9 +371,12 @@ export class RoomManager {
 
   setReady(ws: WebSocket, ready: boolean) {
     const room = this.getRoomBySocket(ws);
-    if (!room || !room.engine) return;
+    if (!room || !room.engine) {
+      sendError(ws, "INVALID_ACTION", "当前房间没有可准备的牌局");
+      return;
+    }
     if (room.engine.state.phase !== "FINISHED") {
-      send(ws, { type: "ERROR", message: "只有本局结束后才能准备" });
+      sendError(ws, "INVALID_ACTION", "只有本局结束后才能准备");
       return;
     }
     const seat = room.sockets.findIndex((socket) => socket === ws);
@@ -294,9 +387,45 @@ export class RoomManager {
 
   action(ws: WebSocket, seat: number, action: RemoteAction) {
     const room = this.getRoomBySocket(ws);
-    if (!room || !room.engine) return;
-    if (room.sockets[seat] !== ws) return;
+    if (!room || !room.engine) {
+      sendError(ws, "INVALID_ACTION", "当前房间没有进行中的牌局");
+      return;
+    }
+    if (!Number.isInteger(seat) || room.sockets[seat] !== ws) {
+      sendError(ws, "INVALID_ACTION", "不能操作其他玩家的座位");
+      return;
+    }
+    if (room.engine.state.turnIndex !== seat) {
+      sendError(ws, "INVALID_ACTION", "当前还没有轮到你操作");
+      return;
+    }
     this.applyAction(room, seat, action);
+  }
+
+  getAdminRoomSnapshots(): AdminRoomSnapshot[] {
+    return [...this.rooms.values()]
+      .map((room) => this.toAdminRoomSnapshot(room))
+      .sort((left, right) => right.createdAt - left.createdAt);
+  }
+
+  getAdminOverview(): AdminRoomOverview {
+    const rooms = this.getAdminRoomSnapshots();
+    return {
+      roomCount: rooms.length,
+      activeGameCount:
+        rooms.filter((room) =>
+          room.phase === "BIDDING" || room.phase === "PLAYING"
+        ).length,
+      connectedHumanCount: rooms.reduce(
+        (sum, room) => sum + room.connectedHumanCount,
+        0,
+      ),
+      occupiedHumanCount: rooms.reduce(
+        (sum, room) => sum + room.occupiedHumanCount,
+        0,
+      ),
+      aiCount: rooms.reduce((sum, room) => sum + room.aiCount, 0),
+    };
   }
 
   disconnect(ws: WebSocket) {
@@ -322,6 +451,8 @@ export class RoomManager {
         room.readySeats[seat] = true;
       }
       this.socketRoom.delete(ws);
+      this.socketAuthTokens.delete(ws);
+      this.socketAccountIds.delete(ws);
       if (room.sockets.every((socket) => socket === null)) {
         this.destroyRoom(room);
         return;
@@ -360,6 +491,7 @@ export class RoomManager {
           identity.playerId,
           identity.isAuthenticated,
         );
+        this.bindSocketIdentity(ws, msg, identity.playerId, identity.isAuthenticated);
         break;
       }
       case "JOIN": {
@@ -379,37 +511,63 @@ export class RoomManager {
           identity.playerId,
           identity.isAuthenticated,
         );
-        if (!result.ok) send(ws, { type: "ERROR", message: result.message });
+        if (!result.ok) {
+          sendError(
+            ws,
+            result.code ?? "INVALID_ACTION",
+            result.message ?? "加入房间失败",
+          );
+        } else {
+          this.bindSocketIdentity(
+            ws,
+            msg,
+            identity.playerId,
+            identity.isAuthenticated,
+          );
+        }
         break;
       }
       case "RECONNECT": {
+        const identity = await this.resolveAuthenticatedMessageIdentity(msg);
+        if (!identity) {
+          sendError(ws, "AUTH_REQUIRED", "登录已失效，请重新登录");
+          break;
+        }
         const result = this.reconnect(
           ws,
           String(msg.room),
           String(msg.token ?? ""),
+          identity.playerId,
         );
         if (!result.ok) {
-          send(ws, {
-            type: "ERROR",
-            code: "RESUME_DENIED",
-            message: result.message,
-          });
+          sendError(
+            ws,
+            result.code ?? "RESUME_DENIED",
+            result.message ?? "恢复房间失败",
+          );
+        } else {
+          this.bindSocketIdentity(ws, msg, identity.playerId, true);
         }
         break;
       }
       case "START":
+        if (!await this.requireSocketIdentity(ws)) break;
         this.start(ws);
         break;
       case "RESTART":
+        if (!await this.requireSocketIdentity(ws)) break;
         this.restart(ws);
         break;
       case "READY":
+        if (!await this.requireSocketIdentity(ws)) break;
         this.setReady(ws, Boolean(msg.ready));
         break;
       case "LEAVE":
+        if (!await this.requireSocketIdentity(ws)) break;
         this.leave(ws);
         break;
       case "ACTION":
+        if (!await this.requireSocketIdentity(ws)) break;
         this.action(ws, Number(msg.seat), msg.action as RemoteAction);
         break;
       case "PING":
@@ -444,6 +602,45 @@ export class RoomManager {
       name: String(msg.name ?? "玩家"),
       isAuthenticated: false,
     };
+  }
+
+  private async resolveAuthenticatedMessageIdentity(
+    msg: Record<string, unknown>,
+  ): Promise<{ playerId: string; name: string } | null> {
+    const authToken = String(msg.authToken ?? "").trim();
+    if (!authToken) return null;
+    const account = await resolveSession(authToken);
+    return account
+      ? { playerId: account.accountId, name: account.nickname }
+      : null;
+  }
+
+  private bindSocketIdentity(
+    ws: WebSocket,
+    msg: Record<string, unknown>,
+    accountId: string,
+    isAuthenticated: boolean,
+  ) {
+    if (!isAuthenticated) return;
+    const authToken = String(msg.authToken ?? "").trim();
+    if (!authToken) return;
+    this.socketAuthTokens.set(ws, authToken);
+    this.socketAccountIds.set(ws, accountId);
+  }
+
+  private async requireSocketIdentity(ws: WebSocket): Promise<boolean> {
+    const authToken = this.socketAuthTokens.get(ws);
+    if (!authToken) {
+      // Old APKs may still use an anonymous room connection during migration.
+      return true;
+    }
+    const expectedAccountId = this.socketAccountIds.get(ws);
+    const account = await resolveSession(authToken);
+    if (account && account.accountId === expectedAccountId) return true;
+
+    sendError(ws, "AUTH_REQUIRED", "登录已失效，请重新登录");
+    this.disconnect(ws);
+    return false;
   }
 
   private getRoomBySocket(ws: WebSocket): Room | null {
@@ -512,10 +709,11 @@ export class RoomManager {
     } catch (err) {
       const ws = room.sockets[seat];
       if (ws) {
-        send(ws, {
-          type: "ERROR",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        sendError(
+          ws,
+          "INVALID_ACTION",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
   }
@@ -595,10 +793,11 @@ export class RoomManager {
     } catch (err) {
       const ws = room.sockets[engine.state.turnIndex];
       if (ws) {
-        send(ws, {
-          type: "ERROR",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        sendError(
+          ws,
+          "INVALID_ACTION",
+          err instanceof Error ? err.message : String(err),
+        );
       }
       this.publishState(room);
     }
@@ -730,17 +929,15 @@ export class RoomManager {
     const humanCount = room.sockets.filter((socket) => socket !== null).length;
     const requiredHumans = 3 - room.aiCount;
     if (humanCount < requiredHumans) {
-      send(ws, {
-        type: "ERROR",
-        message: `还需要加入 ${requiredHumans - humanCount} 名真人玩家`,
-      });
+      sendError(
+        ws,
+        "NOT_READY",
+        `还需要加入 ${requiredHumans - humanCount} 名真人玩家`,
+      );
       return false;
     }
     if (humanCount > requiredHumans) {
-      send(ws, {
-        type: "ERROR",
-        message: "房间真人数量已超过当前 AI 配置",
-      });
+      sendError(ws, "NOT_READY", "房间真人数量已超过当前 AI 配置");
       return false;
     }
     return true;
@@ -766,6 +963,44 @@ export class RoomManager {
         (room.participants.get(left.playerId)?.joinedAt ?? 0) -
           (room.participants.get(right.playerId)?.joinedAt ?? 0)
       );
+  }
+
+  private toAdminRoomSnapshot(room: Room): AdminRoomSnapshot {
+    const requiredHumans = 3 - room.aiCount;
+    const seats = [0, 1, 2].map((seat): AdminRoomSeatSnapshot => {
+      const playerId = room.playerIds[seat];
+      const participant = playerId ? room.participants.get(playerId) : null;
+      const isAi = participant?.isAi === true;
+      const isConnected = !isAi && room.sockets[seat] !== null;
+      return {
+        seat,
+        name: participant?.name ?? "等待加入",
+        isAi,
+        isConnected,
+        isAway: Boolean(
+          participant && !isAi && room.engine &&
+            room.engine.state.phase !== "FINISHED" && !isConnected,
+        ),
+        isHost: seat === room.hostSeat,
+      };
+    });
+    return {
+      roomCode: room.code,
+      createdAt: room.startedAt,
+      phase: room.engine?.state.phase ?? "WAITING",
+      gameNumber: room.engine?.state.gameNumber ?? 0,
+      difficulty: room.difficulty,
+      aiCount: room.aiCount,
+      connectedHumanCount: room.sockets
+        .slice(0, requiredHumans)
+        .filter((socket) => socket !== null).length,
+      occupiedHumanCount: room.playerIds
+        .slice(0, requiredHumans)
+        .filter((playerId) => playerId !== null).length,
+      hostSeat: room.hostSeat,
+      hostName: room.hostSeat >= 0 ? seats[room.hostSeat]?.name ?? null : null,
+      seats,
+    };
   }
 
   private recordFinishedRound(room: Room) {
@@ -801,13 +1036,35 @@ export class RoomManager {
     this.resetReadySeats(room);
 
     if (this.options.persistStats !== false) {
-      void recordGame(scores.map((score) => ({
+      const playerScores = scores.map((score) => ({
         playerId: score.playerId,
         name: score.name,
         delta: score.delta,
         isAi: score.isAi || !room.participants.get(score.playerId)
           ?.isAuthenticated,
-      }))).catch((error) => console.error("记录玩家累计分失败", error));
+      }));
+      void recordGame(playerScores, {
+        matchId: room.matchId,
+        roomCode: room.code,
+        startedAt: room.startedAt,
+        round: {
+          gameNumber: state.gameNumber,
+          finishedAt: Date.now(),
+          winnerPlayerId: state.winnerIndex === null
+            ? null
+            : room.playerIds[state.winnerIndex],
+          landlordPlayerId: state.landlordIndex === null
+            ? null
+            : room.playerIds[state.landlordIndex],
+          multiplier: state.multiplier,
+          players: scores.map((score) => ({
+            playerId: score.playerId,
+            name: score.name,
+            delta: score.delta,
+            isAi: score.isAi,
+          })),
+        },
+      }).catch((error) => console.error("记录玩家累计分和最近战绩失败", error));
     }
   }
 

@@ -3,6 +3,7 @@ package com.loves.doudizhu
 import com.loves.doudizhu.logic.EngineState
 import com.loves.doudizhu.logic.Phase
 import com.loves.doudizhu.logic.ServerGameEvent
+import com.loves.doudizhu.model.Rank
 import com.loves.doudizhu.network.GameCodec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -52,5 +53,23 @@ class GameCodecTest {
         assertNull(event?.comboType)
         assertNull(event?.primaryRank)
         assertNull(event?.comboLength)
+    }
+
+    @Test
+    fun seenRanksSurviveRoundTrip() {
+        val state = EngineState(
+            phase = Phase.PLAYING,
+            seats = emptyList(),
+            turnIndex = 0,
+            seenRanks = mapOf(
+                Rank.R3 to 2,
+                Rank.R2 to 1,
+                Rank.BIG_JOKER to 1
+            )
+        )
+
+        val decoded = GameCodec.decodeState(GameCodec.encodeState(state))
+
+        assertEquals(state.seenRanks, decoded.seenRanks)
     }
 }

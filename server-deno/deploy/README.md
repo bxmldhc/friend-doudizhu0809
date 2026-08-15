@@ -71,3 +71,28 @@ sudo journalctl -u friend-doudizhu -n 100 --no-pager
 
 当前公网 IP 直连使用未加密的 `ws://`。朋友小范围测试可以先用，
 正式长期使用建议后续绑定域名并配置 HTTPS/WSS。
+
+## 管理员账号
+
+管理员权限由 systemd 环境变量控制，客户端提交的昵称或权限字段不会生效：
+
+```ini
+Environment=ADMIN_ACCOUNT_IDS=账号ID1,账号ID2
+Environment=ADMIN_NICKNAMES=
+```
+
+优先使用不会变化的 `ADMIN_ACCOUNT_IDS`。首次迁移现有 `dlc` 账号时可短暂设置
+`ADMIN_NICKNAMES=dlc`，从管理接口确认该账号的 `accountId` 后立刻改用
+`ADMIN_ACCOUNT_IDS` 并清空昵称白名单。多个值使用英文逗号分隔。修改后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart friend-doudizhu
+```
+
+不要把密码、会话 token 或密码哈希写入环境变量。
+
+## HTTPS / WSS
+
+绑定自己的域名后，参照 `Caddyfile.example` 和 `HTTPS-WSS部署说明.md`
+配置反向代理。模板不包含虚构域名或证书指纹。

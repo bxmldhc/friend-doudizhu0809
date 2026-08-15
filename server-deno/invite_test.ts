@@ -18,38 +18,37 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
       }),
     );
 
-    await t.step(
-      "valid six-digit room renders a user-facing page",
-      async () => {
-        const response = await requireResponse(
-          new Request("http://games.example:18080/invite/123456"),
-        );
-        const html = await response.text();
+    await t.step("valid room renders Android open choices", async () => {
+      const response = await requireResponse(
+        new Request("http://games.example:18080/invite/123456"),
+      );
+      const html = await response.text();
 
-        assertEquals(response.status, 200, "邀请页状态码");
-        assertIncludes(
-          response.headers.get("content-type") ?? "",
-          "text/html",
-          "邀请页内容类型",
-        );
-        assertIncludes(html, "好友斗地主", "页面标题");
-        assertIncludes(html, "123456", "房号");
-        assertIncludes(
-          html,
-          "friendddz://join?room=123456",
-          "应用跳转地址",
-        );
-        assertIncludes(
-          html,
-          "http://games.example:18080/downloads/friend-doudizhu-1.2.0.apk",
-          "最新版安装包地址",
-        );
-        assertIncludes(html, "window.setTimeout", "自动打开逻辑");
-        assertNotIncludes(html, "开发", "内部开发说明");
-      },
-    );
+      assertEquals(response.status, 200, "邀请页状态码");
+      assertIncludes(response.headers.get("content-type") ?? "", "text/html", "内容类型");
+      assertIncludes(html, "好友斗地主", "页面标题");
+      assertIncludes(html, "123456", "房号");
+      assertIncludes(
+        html,
+        "intent://join?room=123456#Intent;scheme=friendddz;package=com.loves.doudizhu",
+        "Android intent 地址",
+      );
+      assertIncludes(
+        html,
+        "action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE",
+        "Android intent 行为",
+      );
+      assertIncludes(html, "friendddz://join?room=123456", "备用应用地址");
+      assertIncludes(
+        html,
+        "http://games.example:18080/downloads/friend-doudizhu-1.2.0.apk",
+        "最新安装包地址",
+      );
+      assertIncludes(html, "正在打开应用", "打开状态提示");
+      assertNotIncludes(html, "开发", "内部开发说明");
+    });
 
-    await t.step("HEAD returns headers without an HTML body", async () => {
+    await t.step("HEAD returns headers without a body", async () => {
       const response = await requireResponse(
         new Request("http://localhost/invite/123456", { method: "HEAD" }),
       );

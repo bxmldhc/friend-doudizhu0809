@@ -2,6 +2,10 @@ import { DoudizhuEngine } from "./engine.ts";
 import { RoomManager } from "./rooms.ts";
 import { kv } from "./db.ts";
 import { getStats } from "./store.ts";
+import {
+  registerAccount,
+  resetAccountPassword,
+} from "./auth.ts";
 
 class FakeSocket {
   readyState = 1;
@@ -573,6 +577,226 @@ Deno.test("confirmed PLAY event includes authoritative combo metadata", () => {
     event.type !== "PLAY" || event.comboType !== "SINGLE" ||
     event.primaryRank !== 3 || event.comboLength !== 1
   ) {
-    throw new Error("confirmed PLAY event omitted authoritative combo metadata");
+    throw new Error(
+      "confirmed PLAY event omitted authoritative combo metadata",
+    );
   }
 });
+
+Deno.test("管理房间快照只返回脱敏统计和座位状态", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(
+    socket(host),
+    "房主",
+    "HARD",
+    1,
+    "account_host_123",
+    true,
+  );
+  const code = roomCode(host);
+  manager.join(
+    socket(friend),
+    code,
+    "朋友",
+    "account_friend_123",
+    true,
+  );
+
+  const snapshots = manager.getAdminRoomSnapshots();
+  if (snapshots.length !== 1) {
+    throw new Error("管理房间列表没有返回已创建的房间");
+  }
+  const snapshot = snapshots[0];
+  if (
+    snapshot.roomCode !== code ||
+    snapshot.phase !== "WAITING" ||
+    snapshot.aiCount !== 1 ||
+    snapshot.connectedHumanCount !== 2 ||
+    snapshot.occupiedHumanCount !== 2 ||
+    snapshot.hostName !== "房主"
+  ) {
+    throw new Error("管理房间快照统计不正确");
+  }
+  const serialized = JSON.stringify(snapshot).toLocaleLowerCase();
+  for (
+    const forbidden of [
+      "resumetoken",
+      "resumetokens",
+      "hand",
+      "bottomcards",
+      "password",
+    ]
+  ) {
+    if (serialized.includes(forbidden)) {
+      throw new Error(`管理房间快照泄露了敏感字段 ${forbidden}`);
+    }
+  }
+
+  const overview = manager.getAdminOverview();
+  if (
+    overview.roomCount !== 1 ||
+    overview.activeGameCount !== 0 ||
+    overview.connectedHumanCount !== 2 ||
+    overview.occupiedHumanCount !== 2 ||
+    overview.aiCount !== 1
+  ) {
+    throw new Error("管理房间汇总不正确");
+  }
+});
+
+Deno.test("关键 WebSocket 拒绝场景返回稳定错误码并保留 message", async () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const overflow = new FakeSocket();
+  manager.create(socket(host), "房主", "MEDIUM", 1);
+  const code = roomCode(host);
+
+  const missingJoin = new FakeSocket();
+  await manager.handleMessage(
+    socket(missingJoin),
+    JSON.stringify({ type: "JOIN", room: "000000", name: "访客" }),
+  );
+  assertErrorCode(missingJoin, "ROOM_NOT_FOUND");
+
+  manager.join(socket(friend), code, "朋友");
+  await manager.handleMessage(
+    socket(overflow),
+    JSON.stringify({ type: "JOIN", room: code, name: "多余玩家" }),
+  );
+  assertErrorCode(overflow, "ROOM_FULL");
+
+  manager.start(socket(friend));
+  assertErrorCode(friend, "NOT_HOST");
+
+  const secondManager = new RoomManager({ persistStats: false });
+  const waitingHost = new FakeSocket();
+  secondManager.create(socket(waitingHost), "房主", "MEDIUM", 0);
+  secondManager.start(socket(waitingHost));
+  assertErrorCode(waitingHost, "NOT_READY");
+
+  manager.start(socket(host));
+  const lateJoin = new FakeSocket();
+  await manager.handleMessage(
+    socket(lateJoin),
+    JSON.stringify({ type: "JOIN", room: code, name: "迟到玩家" }),
+  );
+  assertErrorCode(lateJoin, "GAME_ALREADY_STARTED");
+
+  const state = latestState(host).state as Record<string, unknown>;
+  const wrongSeat = Number(state.turnIndex) === 0 ? 1 : 0;
+  manager.action(socket(host), wrongSeat, { kind: "PASS" });
+  assertErrorCode(host, "INVALID_ACTION");
+
+  const invalidResume = new FakeSocket();
+  await manager.handleMessage(
+    socket(invalidResume),
+    JSON.stringify({ type: "RECONNECT", room: code, token: "invalid" }),
+  );
+  assertErrorCode(invalidResume, "AUTH_REQUIRED");
+});
+
+Deno.test("恢复座位必须使用同一账号的有效登录", async () => {
+  const previousIterations = Deno.env.get("AUTH_PBKDF2_ITERATIONS");
+  Deno.env.set("AUTH_PBKDF2_ITERATIONS", "10000");
+  const ownerName = `房主${crypto.randomUUID().slice(0, 6)}`;
+  const friendName = `朋友${crypto.randomUUID().slice(0, 6)}`;
+  const otherName = `旁观${crypto.randomUUID().slice(0, 6)}`;
+
+  try {
+    const owner = await registerAccount(ownerName, "secret12");
+    const friend = await registerAccount(friendName, "secret12");
+    const other = await registerAccount(otherName, "secret12");
+    const manager = new RoomManager({ persistStats: false });
+    const hostSocket = new FakeSocket();
+    const friendSocket = new FakeSocket();
+    await manager.handleMessage(
+      socket(hostSocket),
+      JSON.stringify({
+        type: "CREATE",
+        authToken: owner.token,
+        difficulty: "MEDIUM",
+        aiCount: 1,
+      }),
+    );
+    const room = latestRoom(hostSocket);
+    const code = String(room.room);
+    const resumeToken = String(room.resumeToken);
+    await manager.handleMessage(
+      socket(friendSocket),
+      JSON.stringify({
+        type: "JOIN",
+        room: code,
+        authToken: friend.token,
+      }),
+    );
+    manager.start(socket(hostSocket));
+    manager.disconnect(socket(hostSocket));
+
+    const wrongAccount = new FakeSocket();
+    await manager.handleMessage(
+      socket(wrongAccount),
+      JSON.stringify({
+        type: "RECONNECT",
+        room: code,
+        token: resumeToken,
+        authToken: other.token,
+      }),
+    );
+    assertErrorCode(wrongAccount, "RESUME_DENIED");
+  } finally {
+    if (previousIterations === undefined) {
+      Deno.env.delete("AUTH_PBKDF2_ITERATIONS");
+    } else {
+      Deno.env.set("AUTH_PBKDF2_ITERATIONS", previousIterations);
+    }
+  }
+});
+
+Deno.test("密码重置后已连接账号不能继续操作", async () => {
+  const previousIterations = Deno.env.get("AUTH_PBKDF2_ITERATIONS");
+  Deno.env.set("AUTH_PBKDF2_ITERATIONS", "10000");
+  const nickname = `在线${crypto.randomUUID().slice(0, 6)}`;
+
+  try {
+    const account = await registerAccount(nickname, "secret12");
+    const manager = new RoomManager({ persistStats: false });
+    const host = new FakeSocket();
+    await manager.handleMessage(
+      socket(host),
+      JSON.stringify({
+        type: "CREATE",
+        authToken: account.token,
+        difficulty: "MEDIUM",
+        aiCount: 2,
+      }),
+    );
+    await resetAccountPassword(account.account.accountId, "changed12");
+    await manager.handleMessage(socket(host), JSON.stringify({ type: "START" }));
+    assertErrorCode(host, "AUTH_REQUIRED");
+  } finally {
+    if (previousIterations === undefined) {
+      Deno.env.delete("AUTH_PBKDF2_ITERATIONS");
+    } else {
+      Deno.env.set("AUTH_PBKDF2_ITERATIONS", previousIterations);
+    }
+  }
+});
+
+function assertErrorCode(ws: FakeSocket, expectedCode: string) {
+  const message = lastMessage(ws);
+  if (
+    message.type !== "ERROR" ||
+    message.code !== expectedCode ||
+    typeof message.message !== "string" ||
+    message.message.length === 0
+  ) {
+    throw new Error(
+      `预期错误码 ${expectedCode} 和兼容 message，实际为 ${
+        JSON.stringify(message)
+      }`,
+    );
+  }
+}

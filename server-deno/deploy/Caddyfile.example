@@ -1,0 +1,5 @@
+# 替换为你实际拥有且已解析到服务器公网 IP 的域名。
+your-domain.example {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:18080
+}

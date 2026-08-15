@@ -9,6 +9,7 @@ import com.loves.doudizhu.logic.RoomRoundSummary
 import com.loves.doudizhu.logic.SeatAction
 import com.loves.doudizhu.logic.ServerGameEvent
 import com.loves.doudizhu.model.Card
+import com.loves.doudizhu.model.Rank
 import com.loves.doudizhu.model.parseCards
 import com.loves.doudizhu.model.toNotation
 import org.json.JSONArray
@@ -42,6 +43,9 @@ object GameCodec {
         obj.put("passes", state.passes)
         obj.put("bottomCards", encodeCards(state.bottomCards))
         obj.put("multiplier", state.multiplier)
+        obj.put("seenRanks", JSONObject().apply {
+            state.seenRanks.forEach { (rank, count) -> put(rank.order.toString(), count) }
+        })
         obj.put("winnerIndex", state.winnerIndex ?: JSONObject.NULL)
         obj.put("scoreDelta", JSONArray().apply { state.scoreDelta.forEach { put(it) } })
         obj.put("message", state.message)
@@ -190,6 +194,7 @@ object GameCodec {
             passes = obj.getInt("passes"),
             bottomCards = decodeCards(obj.getJSONArray("bottomCards")),
             multiplier = obj.getInt("multiplier"),
+            seenRanks = decodeSeenRanks(obj.optJSONObject("seenRanks")),
             winnerIndex = nullableInt(obj, "winnerIndex"),
             scoreDelta = if (obj.has("scoreDelta")) {
                 val arr = obj.getJSONArray("scoreDelta")
@@ -267,5 +272,17 @@ object GameCodec {
 
     private fun nullableString(obj: JSONObject, key: String): String? {
         return if (obj.has(key) && !obj.isNull(key)) obj.optString(key).ifBlank { null } else null
+    }
+
+    private fun decodeSeenRanks(obj: JSONObject?): Map<Rank, Int> {
+        if (obj == null) return emptyMap()
+        val ranksByOrder = Rank.entries.associateBy { it.order }
+        return buildMap {
+            obj.keys().forEach { key ->
+                val rank = key.toIntOrNull()?.let(ranksByOrder::get)
+                val count = obj.optInt(key, 0)
+                if (rank != null && count > 0) put(rank, count)
+            }
+        }
     }
 }

@@ -1,10 +1,12 @@
 ﻿param(
-    [string]$VersionName = "1.3.1",
-    [int]$VersionCode = 5,
+    [string]$VersionName = "1.6.0",
+    [int]$VersionCode = 8,
     [string[]]$ReleaseNotes = @(
-        "新增单牌点数真人语音",
-        "新增对子、三带一、顺子、飞机、炸弹等牌型播报",
-        "出牌语音仅由服务器确认事件触发"
+        "首页新增牌局恢复入口，并支持意外断线自动重连",
+        "新增服务端授权的超级管理入口、账号查询和密码重置",
+        "管理页可查看账号、在线玩家和房间运行概览",
+        "登录失效与房间恢复失败改为结构化错误处理",
+        "补充 HTTPS/WSS 长期部署模板与操作说明"
     ),
     [switch]$ForceUpdate
 )

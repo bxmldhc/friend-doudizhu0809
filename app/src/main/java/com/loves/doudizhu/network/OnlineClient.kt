@@ -8,6 +8,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 enum class ConnectionState {
     CONNECTING,
@@ -32,8 +33,8 @@ class OnlineClient(
         requiredHumans: Int
     ) -> Unit,
     private val onState: (EngineState) -> Unit,
-    private val onError: (String) -> Unit,
-    private val onConnection: (ConnectionState) -> Unit
+    private val onConnection: (ConnectionState) -> Unit,
+    private val onServerError: (ServerError) -> Unit
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -44,20 +45,26 @@ class OnlineClient(
     private var webSocket: WebSocket? = null
     private var closedByUser = false
     private var hasOpened = false
+    private var lastConnectionState: ConnectionState? = null
+    private val terminalCallbackSent = AtomicBoolean(false)
 
     fun connect(onOpen: () -> Unit = {}) {
         closedByUser = false
-        onConnection(ConnectionState.CONNECTING)
+        hasOpened = false
+        terminalCallbackSent.set(false)
+        emitConnection(ConnectionState.CONNECTING)
         webSocket = client.newWebSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (closedByUser || webSocket !== this@OnlineClient.webSocket) return
                     hasOpened = true
-                    onConnection(ConnectionState.OPEN)
+                    emitConnection(ConnectionState.OPEN)
                     onOpen()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (closedByUser || webSocket !== this@OnlineClient.webSocket) return
                     try {
                         when (val msg = GameProtocol.parseMessage(text)) {
                             is NetMessage.Room -> onRoom(
@@ -70,27 +77,51 @@ class OnlineClient(
                                 msg.requiredHumans
                             )
                             is NetMessage.State -> onState(msg.state)
-                            is NetMessage.Error -> onError(msg.message)
+                            is NetMessage.Error -> onServerError(msg.error)
                             NetMessage.Pong -> Unit
                         }
                     } catch (error: Exception) {
-                        onError(error.message ?: "服务器消息解析失败")
+                        onServerError(
+                            ServerError(
+                                code = "MESSAGE_PARSE_FAILED",
+                                message = error.message ?: "服务器消息解析失败"
+                            )
+                        )
                     }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    if (!closedByUser) onConnection(ConnectionState.RECONNECTING)
+                    if (!closedByUser && webSocket === this@OnlineClient.webSocket) {
+                        emitConnection(ConnectionState.RECONNECTING)
+                    }
                     webSocket.close(code, reason)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    if (!closedByUser) onConnection(ConnectionState.CLOSED)
+                    if (
+                        !closedByUser &&
+                        webSocket === this@OnlineClient.webSocket &&
+                        terminalCallbackSent.compareAndSet(false, true)
+                    ) {
+                        emitConnection(ConnectionState.CLOSED)
+                    }
                 }
 
                 override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
-                    if (!closedByUser) {
-                        onConnection(if (hasOpened) ConnectionState.RECONNECTING else ConnectionState.FAILED)
-                        onError(error.message ?: "连接服务器失败")
+                    if (
+                        !closedByUser &&
+                        webSocket === this@OnlineClient.webSocket &&
+                        terminalCallbackSent.compareAndSet(false, true)
+                    ) {
+                        emitConnection(
+                            if (hasOpened) ConnectionState.RECONNECTING else ConnectionState.FAILED
+                        )
+                        onServerError(
+                            ServerError(
+                                code = "CONNECTION_FAILED",
+                                message = error.message ?: "连接服务器失败"
+                            )
+                        )
                     }
                 }
             }
@@ -106,7 +137,7 @@ class OnlineClient(
     }
 
     fun reconnectRoom(room: String, token: String) {
-        webSocket?.send(GameProtocol.encodeReconnect(room, token))
+        webSocket?.send(GameProtocol.encodeReconnect(room, token, authToken))
     }
 
     fun startGame() {
@@ -131,7 +162,14 @@ class OnlineClient(
 
     fun close() {
         closedByUser = true
+        terminalCallbackSent.set(true)
         webSocket?.close(1000, "bye")
         webSocket = null
+    }
+
+    private fun emitConnection(state: ConnectionState) {
+        if (lastConnectionState == state) return
+        lastConnectionState = state
+        onConnection(state)
     }
 }

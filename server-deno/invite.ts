@@ -1,6 +1,7 @@
 import { loadPublishedUpdate } from "./updates.ts";
 
 const ROOM_CODE_PATTERN = /^\d{6}$/;
+const ANDROID_PACKAGE = "com.loves.doudizhu";
 
 export async function handleInviteRequest(
   req: Request,
@@ -18,8 +19,18 @@ export async function handleInviteRequest(
   }
 
   const appUrl = `friendddz://join?room=${encodeURIComponent(roomCode)}`;
+  const fallbackUrl = new URL(`/invite/${roomCode}`, url.origin).toString();
+  const intentUrl = [
+    `intent://join?room=${encodeURIComponent(roomCode)}#Intent`,
+    "scheme=friendddz",
+    `package=${ANDROID_PACKAGE}`,
+    "action=android.intent.action.VIEW",
+    "category=android.intent.category.BROWSABLE",
+    `S.browser_fallback_url=${encodeURIComponent(fallbackUrl)}`,
+    "end",
+  ].join(";");
   const downloadUrl = await latestApkUrl(url.origin);
-  const body = renderInvitePage(roomCode, appUrl, downloadUrl);
+  const body = renderInvitePage(roomCode, intentUrl, appUrl, downloadUrl);
   const headers = {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
@@ -60,6 +71,7 @@ function decodeRoomCode(value: string): string {
 
 function renderInvitePage(
   roomCode: string,
+  intentUrl: string,
   appUrl: string,
   downloadUrl: string,
 ): string {
@@ -113,7 +125,8 @@ function renderInvitePage(
       background: transparent;
       border: 1px solid #8fc9c2;
     }
-    small { display: block; margin-top: 18px; color: #b8dcd7; line-height: 1.5; }
+    #open-status { min-height: 24px; margin: 14px 0 0; color: #f7cf67; }
+    small { display: block; margin-top: 10px; color: #b8dcd7; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -121,14 +134,23 @@ function renderInvitePage(
     <h1>好友斗地主</h1>
     <p>朋友邀请你加入房间</p>
     <strong>${roomCode}</strong>
-    <a id="open-app" href="${appUrl}">打开应用并加入房间</a>
-    <a class="secondary" href="${downloadUrl}">下载最新版应用</a>
-    <small>如果没有自动打开，请点击上方按钮。</small>
+    <a id="open-app" href="${intentUrl}">打开应用并加入房间</a>
+    <a class="secondary" href="${appUrl}">备用打开方式</a>
+    <a class="secondary" href="${downloadUrl}">下载最新版本</a>
+    <p id="open-status" aria-live="polite"></p>
+    <small>若浏览器阻止打开，请选择“允许打开外部应用”，或使用备用打开方式。</small>
   </main>
   <script>
-    window.setTimeout(function () {
-      window.location.href = ${JSON.stringify(appUrl)};
-    }, 300);
+    var openButton = document.getElementById("open-app");
+    var status = document.getElementById("open-status");
+    openButton.addEventListener("click", function () {
+      status.textContent = "正在打开应用…";
+      window.setTimeout(function () {
+        if (!document.hidden) {
+          status.textContent = "没有打开？请允许浏览器打开外部应用，或点击备用打开方式。";
+        }
+      }, 1200);
+    });
   </script>
 </body>
 </html>`;

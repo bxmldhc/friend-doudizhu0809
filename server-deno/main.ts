@@ -22,7 +22,7 @@ Deno.serve({ port }, async (req) => {
   if (updateResponse) return updateResponse;
   const inviteResponse = await handleInviteRequest(req);
   if (inviteResponse) return inviteResponse;
-  const apiResponse = await handleApiRequest(req);
+  const apiResponse = await handleApiRequest(req, { roomManager: manager });
   if (apiResponse) return apiResponse;
   if (url.pathname === "/ws") {
     const { socket, response } = Deno.upgradeWebSocket(req);
@@ -32,6 +32,7 @@ Deno.serve({ port }, async (req) => {
       } catch (err) {
         socket.send(JSON.stringify({
           type: "ERROR",
+          code: "INVALID_ACTION",
           message: err instanceof Error ? err.message : String(err),
         }));
       }
