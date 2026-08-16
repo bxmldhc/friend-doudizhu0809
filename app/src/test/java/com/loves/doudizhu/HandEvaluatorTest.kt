@@ -64,6 +64,36 @@ class HandEvaluatorTest {
     }
 
     @Test
+    fun detectsFourWithTwoSinglesAndTwoPairs() {
+        assertEquals(
+            ComboType.FOUR_TWO_SINGLE,
+            HandEvaluator.classify(parseCards("7H 7S 7D 7C 3H 4H"))?.type
+        )
+        assertEquals(
+            ComboType.FOUR_TWO_PAIR,
+            HandEvaluator.classify(parseCards("7H 7S 7D 7C 3H 3S 4H 4S"))?.type
+        )
+    }
+
+    @Test
+    fun fourWithOnlyOneKickerGroupIsInvalid() {
+        assertNull(HandEvaluator.classify(parseCards("7H 7S 7D 7C 3H")))
+        assertNull(HandEvaluator.classify(parseCards("7H 7S 7D 7C 3H 3S")))
+    }
+
+    @Test
+    fun airplaneBodyCannotContainTwo() {
+        assertNull(HandEvaluator.classify(parseCards("KH KS KD AH AS AD 2H 2S 2D")))
+    }
+
+    @Test
+    fun differentLengthStraightsCannotBeatEachOther() {
+        val straight5 = HandEvaluator.classify(parseCards("3H 4S 5D 6C 7H"))!!
+        val straight6 = HandEvaluator.classify(parseCards("4H 5S 6D 7C 8H 9S"))!!
+        assertFalse(HandEvaluator.canBeat(straight6, straight5))
+    }
+
+    @Test
     fun sameTypeHigherRankBeats() {
         val pair7 = HandEvaluator.classify(parseCards("7H 7S"))!!
         val pair8 = HandEvaluator.classify(parseCards("8H 8S"))!!

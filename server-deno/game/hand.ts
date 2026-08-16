@@ -47,25 +47,15 @@ export function classify(cards: Card[]): Pattern | null {
     return type ? { type, primary: rank, length: 1, cards: sorted } : null;
   }
   if (groupList.length === 2) {
-    const four = groupList.find((g) => g.length === 4);
-    if (four) {
-      const other = groupList.find((g) => g.length !== 4);
-      if (!other) return null;
-      return other.length === 1
-        ? { type: "FOUR_TWO_SINGLE", primary: four[0].r, length: 1, cards: sorted }
-        : other.length === 2
-        ? { type: "FOUR_TWO_PAIR", primary: four[0].r, length: 1, cards: sorted }
-        : null;
-    }
     const triple = groupList.find((g) => g.length === 3);
     if (triple) {
       const other = groupList.find((g) => g.length !== 3);
-      if (!other) return null;
-      return other.length === 1
-        ? { type: "TRIPLE_SINGLE", primary: triple[0].r, length: 1, cards: sorted }
-        : other.length === 2
-        ? { type: "TRIPLE_PAIR", primary: triple[0].r, length: 1, cards: sorted }
-        : null;
+      if (other?.length === 1) {
+        return { type: "TRIPLE_SINGLE", primary: triple[0].r, length: 1, cards: sorted };
+      }
+      if (other?.length === 2) {
+        return { type: "TRIPLE_PAIR", primary: triple[0].r, length: 1, cards: sorted };
+      }
     }
   }
 
@@ -171,10 +161,12 @@ export function allPlays(hand: Card[]): Card[][] {
       const tripleCards = run.flatMap((r) => groups.get(r)!.slice(0, 3));
       add(tripleCards);
       const excluded = new Set(run);
-      const singleWings = pickWings(groups, excluded, len, false);
-      if (singleWings) add([...tripleCards, ...singleWings]);
-      const pairWings = pickWings(groups, excluded, len, true);
-      if (pairWings) add([...tripleCards, ...pairWings]);
+      for (const wings of wingChoices(groups, excluded, len, false)) {
+        add([...tripleCards, ...wings]);
+      }
+      for (const wings of wingChoices(groups, excluded, len, true)) {
+        add([...tripleCards, ...wings]);
+      }
     }
   }
 
@@ -182,18 +174,20 @@ export function allPlays(hand: Card[]): Card[][] {
     if (list.length >= 3) {
       const triple = list.slice(0, 3);
       const other = [...groups.entries()].filter(([r]) => r !== rank).sort((a, b) => a[0] - b[0]);
-      const single = other.find(([, g]) => g.length >= 1)?.[1]?.[0];
-      if (single) add([...triple, single]);
-      const pair = other.find(([, g]) => g.length >= 2)?.[1]?.slice(0, 2);
-      if (pair) add([...triple, ...pair]);
+      for (const [, cards] of other) {
+        add([...triple, cards[0]]);
+        if (cards.length >= 2) add([...triple, ...cards.slice(0, 2)]);
+      }
     }
     if (list.length >= 4) {
       const bomb = list.slice(0, 4);
-      const other = [...groups.entries()].filter(([r]) => r !== rank).sort((a, b) => a[0] - b[0]);
-      const singles = other.slice(0, 2).flatMap(([, g]) => g.slice(0, 1));
-      if (singles.length === 2) add([...bomb, ...singles]);
-      const pairs = other.filter(([, g]) => g.length >= 2).slice(0, 2).flatMap(([, g]) => g.slice(0, 2));
-      if (pairs.length === 4) add([...bomb, ...pairs]);
+      const excluded = new Set([rank]);
+      for (const wings of wingChoices(groups, excluded, 2, false)) {
+        add([...bomb, ...wings]);
+      }
+      for (const wings of wingChoices(groups, excluded, 2, true)) {
+        add([...bomb, ...wings]);
+      }
     }
   }
 
@@ -222,17 +216,32 @@ function isConsecutive(ranks: number[]): boolean {
   return true;
 }
 
-function pickWings(
+function wingChoices(
   groups: Map<number, Card[]>,
   excluded: Set<number>,
   count: number,
   pair: boolean
-): Card[] | null {
+): Card[][] {
   const eligible = [...groups.entries()]
-    .filter(([r]) => !excluded.has(r) && r !== 16 && r !== 17)
+    .filter(([r]) => !excluded.has(r))
     .filter(([, g]) => g.length >= (pair ? 2 : 1))
-    .sort((a, b) => a[0] - b[0])
-    .slice(0, count);
-  if (eligible.length < count) return null;
-  return eligible.flatMap(([, g]) => g.slice(0, pair ? 2 : 1));
+    .sort((a, b) => a[0] - b[0]);
+  if (eligible.length < count) return [];
+
+  const result: Card[][] = [];
+  const selected: Card[][] = [];
+  const choose = (start: number) => {
+    if (selected.length === count) {
+      result.push(selected.flat());
+      return;
+    }
+    const remaining = count - selected.length;
+    for (let index = start; index <= eligible.length - remaining; index++) {
+      selected.push(eligible[index][1].slice(0, pair ? 2 : 1));
+      choose(index + 1);
+      selected.pop();
+    }
+  };
+  choose(0);
+  return result;
 }

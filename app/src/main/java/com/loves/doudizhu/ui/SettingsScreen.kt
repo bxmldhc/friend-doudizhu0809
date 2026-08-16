@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -104,171 +105,182 @@ fun HomeScreen(
     onVoiceEnabledChange: (Boolean) -> Unit,
     onCheckUpdate: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxSize().background(PageBg).padding(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        Column(
-            modifier = Modifier.weight(0.9f).fillMaxSize(),
-            verticalArrangement = Arrangement.Center
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(PageBg)) {
+        val compactHeight = maxHeight < 500.dp
+        val pagePadding = if (compactHeight) 12.dp else 24.dp
+        val sectionGap = if (compactHeight) 12.dp else 24.dp
+
+        Row(
+            modifier = Modifier.fillMaxSize().padding(pagePadding),
+            horizontalArrangement = Arrangement.spacedBy(sectionGap)
         ) {
-            Text("好友斗地主", color = Wax, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                text = "三个人，马上开一局。",
-                color = Color.White,
-                fontSize = 42.sp,
-                lineHeight = 46.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = "创建六位房号，选择 AI 数量，再发给朋友加入。",
-                color = Muted,
-                fontSize = 16.sp
-            )
-            Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = onCreate,
-                    modifier = Modifier.height(52.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = Coral
-                    )
-                ) {
-                    Icon(Icons.Default.PlayArrow, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("创建房间", fontWeight = FontWeight.Bold)
-                }
-                OutlinedButton(onClick = onJoin, modifier = Modifier.height(52.dp)) {
-                    Text("加入房间", fontWeight = FontWeight.Bold)
-                }
-            }
-            state.resumeRoomCode?.let { room ->
-                Spacer(Modifier.height(12.dp))
-                Column {
+            Column(
+                modifier = Modifier
+                    .weight(0.9f)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("好友斗地主", color = Wax, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = "三个人，马上开一局。",
+                    color = Color.White,
+                    fontSize = if (compactHeight) 34.sp else 42.sp,
+                    lineHeight = if (compactHeight) 38.sp else 46.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(if (compactHeight) 6.dp else 10.dp))
+                Text(
+                    text = "创建六位房号，选择 AI 数量，再发给朋友加入。",
+                    color = Muted,
+                    fontSize = if (compactHeight) 14.sp else 16.sp
+                )
+                Spacer(Modifier.height(if (compactHeight) 12.dp else 24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
-                        onClick = onResume,
-                        modifier = Modifier.height(50.dp),
+                        onClick = onCreate,
+                        modifier = Modifier.height(52.dp),
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = Wax,
-                            contentColor = PageBg
+                            containerColor = Coral
                         )
                     ) {
-                        Icon(Icons.Default.Restore, contentDescription = null)
+                        Icon(Icons.Default.PlayArrow, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("恢复房间 $room", fontWeight = FontWeight.Bold)
+                        Text("创建房间", fontWeight = FontWeight.Bold)
                     }
-                    state.resumeSavedAt?.let { savedAt ->
-                        Spacer(Modifier.height(5.dp))
+                    OutlinedButton(onClick = onJoin, modifier = Modifier.height(52.dp)) {
+                        Text("加入房间", fontWeight = FontWeight.Bold)
+                    }
+                }
+                state.resumeRoomCode?.let { room ->
+                    Spacer(Modifier.height(if (compactHeight) 8.dp else 12.dp))
+                    Column {
+                        Button(
+                            onClick = onResume,
+                            modifier = Modifier.height(50.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = Wax,
+                                contentColor = PageBg
+                            )
+                        ) {
+                            Icon(Icons.Default.Restore, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("恢复房间 $room", fontWeight = FontWeight.Bold)
+                        }
+                        state.resumeSavedAt?.let { savedAt ->
+                            Spacer(Modifier.height(5.dp))
+                            Text(
+                                text = resumeTimeDescription(savedAt),
+                                color = Muted,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(if (compactHeight) 10.dp else 20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConnectionDot(state.connection)
+                    Spacer(Modifier.width(8.dp))
+                    Text(connectionText(state.connection), color = Muted, fontSize = 13.sp)
+                    Spacer(Modifier.width(16.dp))
+                    Icon(Icons.Default.Person, contentDescription = null, tint = Muted)
+                    Spacer(Modifier.width(5.dp))
+                    Text(state.nickname, color = Color.White, fontSize = 13.sp)
+                }
+            }
+            Surface(
+                modifier = Modifier.weight(1.1f).fillMaxSize(),
+                color = Color(0xFF1B4A4C),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    Image(
+                        painter = painterResource(R.drawable.table_table_felt),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopStart).padding(if (compactHeight) 10.dp else 18.dp),
+                        color = Color(0xDD102F37),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
                         Text(
-                            text = resumeTimeDescription(savedAt),
-                            color = Muted,
+                            text = "熟人局 · 服务器裁判",
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                             fontSize = 12.sp
                         )
                     }
-                }
-            }
-            Spacer(Modifier.height(20.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ConnectionDot(state.connection)
-                Spacer(Modifier.width(8.dp))
-                Text(connectionText(state.connection), color = Muted, fontSize = 13.sp)
-                Spacer(Modifier.width(16.dp))
-                Icon(Icons.Default.Person, contentDescription = null, tint = Muted)
-                Spacer(Modifier.width(5.dp))
-                Text(state.nickname, color = Color.White, fontSize = 13.sp)
-            }
-        }
-        Surface(
-            modifier = Modifier.weight(1.1f).fillMaxSize(),
-            color = Color(0xFF1B4A4C),
-            shape = RoundedCornerShape(28.dp)
-        ) {
-            Box(Modifier.fillMaxSize()) {
-                Image(
-                    painter = painterResource(R.drawable.table_table_felt),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-                Surface(
-                    modifier = Modifier.align(Alignment.TopStart).padding(18.dp),
-                    color = Color(0xDD102F37),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        text = "熟人局 · 服务器裁判",
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        fontSize = 12.sp
+                    Image(
+                        painter = painterResource(R.drawable.brand_landlord_badge),
+                        contentDescription = "地主标记",
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(if (compactHeight) 60.dp else 76.dp)
                     )
                 }
-                Image(
-                    painter = painterResource(R.drawable.brand_landlord_badge),
-                    contentDescription = "地主标记",
-                    modifier = Modifier.align(Alignment.Center).size(76.dp)
-                )
             }
-        }
-        LazyColumn(
-            modifier = Modifier
-                .width(60.dp)
-                .fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom)
-        ) {
-            if (state.isAdmin) {
-                item {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        IconButton(onClick = onAdmin, modifier = Modifier.size(48.dp)) {
-                            Icon(
-                                Icons.Default.AdminPanelSettings,
-                                contentDescription = "超级管理入口",
-                                tint = Wax
-                            )
+            LazyColumn(
+                modifier = Modifier
+                    .width(60.dp)
+                    .fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom)
+            ) {
+                if (state.isAdmin) {
+                    item {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            IconButton(onClick = onAdmin, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    Icons.Default.AdminPanelSettings,
+                                    contentDescription = "超级管理入口",
+                                    tint = Wax
+                                )
+                            }
+                            Text("管理", color = Muted, fontSize = 11.sp)
                         }
-                        Text("管理", color = Muted, fontSize = 11.sp)
                     }
                 }
-            }
-            item {
-                HomeNavigationItem(
-                    label = "战绩",
-                    onClick = onHistory
-                ) {
-                    Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
+                item {
+                    HomeNavigationItem(
+                        label = "战绩",
+                        onClick = onHistory
+                    ) {
+                        Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
+                    }
                 }
-            }
-            item {
-                HomeNavigationItem(
-                    label = "更新",
-                    onClick = onCheckUpdate
-                ) {
-                    Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
+                item {
+                    HomeNavigationItem(
+                        label = "更新",
+                        onClick = onCheckUpdate
+                    ) {
+                        Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
+                    }
                 }
-            }
-            item {
-                HomeNavigationItem(
-                    label = if (state.voiceEnabled) "语音开" else "语音关",
-                    onClick = { onVoiceEnabledChange(!state.voiceEnabled) }
-                ) {
-                    Icon(
-                        imageVector = if (state.voiceEnabled) {
-                            Icons.AutoMirrored.Filled.VolumeUp
-                        } else {
-                            Icons.AutoMirrored.Filled.VolumeOff
-                        },
-                        contentDescription = if (state.voiceEnabled) "关闭语音" else "开启语音",
-                        tint = if (state.voiceEnabled) Wax else Muted
-                    )
+                item {
+                    HomeNavigationItem(
+                        label = if (state.voiceEnabled) "语音开" else "语音关",
+                        onClick = { onVoiceEnabledChange(!state.voiceEnabled) }
+                    ) {
+                        Icon(
+                            imageVector = if (state.voiceEnabled) {
+                                Icons.AutoMirrored.Filled.VolumeUp
+                            } else {
+                                Icons.AutoMirrored.Filled.VolumeOff
+                            },
+                            contentDescription = if (state.voiceEnabled) "关闭语音" else "开启语音",
+                            tint = if (state.voiceEnabled) Wax else Muted
+                        )
+                    }
                 }
-            }
-            item {
-                HomeNavigationItem(
-                    label = "账号",
-                    onClick = onAccount
-                ) {
-                    Icon(Icons.Default.ManageAccounts, contentDescription = "账号管理", tint = Color.White)
+                item {
+                    HomeNavigationItem(
+                        label = "账号",
+                        onClick = onAccount
+                    ) {
+                        Icon(Icons.Default.ManageAccounts, contentDescription = "账号管理", tint = Color.White)
+                    }
                 }
             }
         }

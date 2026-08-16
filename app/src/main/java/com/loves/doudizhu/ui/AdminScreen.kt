@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -82,175 +83,193 @@ fun AdminScreen(
     var resetTarget by remember { mutableStateOf<AdminAccount?>(null) }
     var showCreateAccount by remember { mutableStateOf(false) }
 
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(AdminPageBg)
-            .padding(horizontal = 18.dp, vertical = 12.dp)
+            .background(AdminPageBg),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回首页", tint = Color.White)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text("超级管理入口", color = AdminWax, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("账号与房间概览", color = AdminMuted, fontSize = 12.sp)
-            }
-            IconButton(onClick = onRetry, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.Refresh, "刷新", tint = Color.White)
+        item(key = "header") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回首页", tint = Color.White)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("超级管理入口", color = AdminWax, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("账号与房间概览", color = AdminMuted, fontSize = 12.sp)
+                }
+                IconButton(onClick = onRetry, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Refresh, "刷新", tint = Color.White)
+                }
             }
         }
 
         state.overview?.let { overview ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                SummaryTile("账号", overview.accountCount.toString(), Modifier.weight(1f))
-                SummaryTile("房间", overview.roomCount.toString(), Modifier.weight(1f))
-                SummaryTile("在线真人", overview.connectedHumanCount.toString(), Modifier.weight(1f))
-                SummaryTile("进行中", overview.activeGameCount.toString(), Modifier.weight(1f))
+            item(key = "overview") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SummaryTile("账号", overview.accountCount.toString(), Modifier.weight(1f))
+                    SummaryTile("房间", overview.roomCount.toString(), Modifier.weight(1f))
+                    SummaryTile("在线真人", overview.connectedHumanCount.toString(), Modifier.weight(1f))
+                    SummaryTile("进行中", overview.activeGameCount.toString(), Modifier.weight(1f))
+                }
             }
         }
 
-        TabRow(
-            selectedTabIndex = selectedTab,
-            containerColor = AdminPanel,
-            contentColor = AdminWax
-        ) {
-            Tab(selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("账号管理") })
-            Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("当前房间") })
-            Tab(selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("操作记录") })
+        item(key = "tabs") {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = AdminPanel,
+                contentColor = AdminWax
+            ) {
+                Tab(selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("账号管理") })
+                Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("当前房间") })
+                Tab(selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("操作记录") })
+            }
         }
-        Spacer(Modifier.height(8.dp))
 
         when {
             state.loading && state.overview == null -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = AdminCoral)
+                item(key = "loading") {
+                    Box(
+                        Modifier.fillMaxWidth().height(160.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = AdminCoral)
+                    }
                 }
             }
             state.error != null && state.overview == null -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(state.error, color = Color(0xFFF28B78))
-                        Spacer(Modifier.height(10.dp))
-                        Button(onClick = onRetry) { Text("重试") }
+                item(key = "error") {
+                    Box(
+                        Modifier.fillMaxWidth().height(160.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(state.error, color = Color(0xFFF28B78))
+                            Spacer(Modifier.height(10.dp))
+                            Button(onClick = onRetry) { Text("重试") }
+                        }
                     }
                 }
             }
             selectedTab == 0 -> {
-                Surface(
-                    color = AdminPanel,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                item(key = "registration") {
+                    Surface(
+                        color = AdminPanel,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("允许注册新账号", color = Color.White, fontWeight = FontWeight.Bold)
-                            Text(
-                                if (state.registrationEnabled) "当前开放注册" else "当前仅允许已有账号登录",
-                                color = AdminMuted,
-                                fontSize = 11.sp
-                            )
-                        }
-                        if (state.updatingRegistration) {
-                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        } else {
-                            Switch(
-                                checked = state.registrationEnabled,
-                                onCheckedChange = onSetRegistrationEnabled
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it.take(24) },
-                        label = { Text("搜索账号名") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Button(
-                        onClick = { onSearch(query) },
-                        modifier = Modifier.height(50.dp),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = AdminCoral
-                        )
-                    ) {
-                        Text("搜索")
-                    }
-                    Button(
-                        onClick = { showCreateAccount = true },
-                        enabled = !state.creatingAccount,
-                        modifier = Modifier.height(50.dp),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = AdminWax,
-                            contentColor = AdminPageBg
-                        )
-                    ) {
-                        if (state.creatingAccount) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.PersonAdd,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("创建账号")
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(state.accounts, key = { it.accountId }) { account ->
-                        AccountRow(
-                            account = account,
-                            resetting = state.resettingAccountId == account.accountId,
-                            updating = state.updatingAccountId == account.accountId,
-                            onReset = { resetTarget = account },
-                            onSetDisabled = { disabled ->
-                                onSetAccountDisabled(account.accountId, disabled)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("允许注册新账号", color = Color.White, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (state.registrationEnabled) "当前开放注册" else "当前仅允许已有账号登录",
+                                    color = AdminMuted,
+                                    fontSize = 11.sp
+                                )
                             }
+                            if (state.updatingRegistration) {
+                                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                            } else {
+                                Switch(
+                                    checked = state.registrationEnabled,
+                                    onCheckedChange = onSetRegistrationEnabled
+                                )
+                            }
+                        }
+                    }
+                }
+                item(key = "account-actions") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it.take(24) },
+                            label = { Text("搜索账号名") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
                         )
+                        Button(
+                            onClick = { onSearch(query) },
+                            modifier = Modifier.height(50.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = AdminCoral
+                            )
+                        ) {
+                            Text("搜索")
+                        }
+                        Button(
+                            onClick = { showCreateAccount = true },
+                            enabled = !state.creatingAccount,
+                            modifier = Modifier.height(50.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = AdminWax,
+                                contentColor = AdminPageBg
+                            )
+                        ) {
+                            if (state.creatingAccount) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.PersonAdd,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("创建账号")
+                            }
+                        }
+                    }
+                }
+                items(state.accounts, key = { it.accountId }) { account ->
+                    AccountRow(
+                        account = account,
+                        resetting = state.resettingAccountId == account.accountId,
+                        updating = state.updatingAccountId == account.accountId,
+                        onReset = { resetTarget = account },
+                        onSetDisabled = { disabled ->
+                            onSetAccountDisabled(account.accountId, disabled)
+                        }
+                    )
+                }
+                if (!state.loading && state.accounts.isEmpty()) {
+                    item(key = "accounts-empty") {
+                        AdminEmptyState("没有找到账号")
                     }
                 }
             }
             selectedTab == 1 -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(state.rooms, key = { it.roomCode }) { room ->
-                        RoomRow(room)
+                items(state.rooms, key = { it.roomCode }) { room ->
+                    RoomRow(room)
+                }
+                if (!state.loading && state.rooms.isEmpty()) {
+                    item(key = "rooms-empty") {
+                        AdminEmptyState("当前没有房间")
                     }
                 }
             }
             else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(state.auditRecords, key = { it.auditId }) { record ->
-                        AuditRow(record)
+                items(state.auditRecords, key = { it.auditId }) { record ->
+                    AuditRow(record)
+                }
+                if (!state.loading && state.auditRecords.isEmpty()) {
+                    item(key = "audit-empty") {
+                        AdminEmptyState("还没有管理操作记录")
                     }
                 }
             }
@@ -278,6 +297,19 @@ fun AdminScreen(
                 onCreateAccount(nickname, password)
             }
         )
+    }
+}
+
+@Composable
+private fun AdminEmptyState(message: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(112.dp),
+        color = AdminPanel,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(message, color = AdminMuted, fontSize = 13.sp)
+        }
     }
 }
 

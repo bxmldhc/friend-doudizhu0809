@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,33 +60,33 @@ fun HistoryScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize().background(HistoryBg).padding(20.dp)
+    val matches = stats?.recentMatches.orEmpty()
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(HistoryBg),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回首页", tint = Color.White)
-            }
-            Column {
-                Text("最近战绩", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                Text("按账号保存最近十场，点击场次查看每一小局", color = Muted, fontSize = 13.sp)
+        item(key = "header") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回首页", tint = Color.White)
+                }
+                Column {
+                    Text("最近战绩", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                    Text("按账号保存最近十场，点击场次查看每一小局", color = Muted, fontSize = 13.sp)
+                }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        StatsPanel(stats = stats, loading = loading, error = error, onRetry = onRetry)
-        Spacer(Modifier.height(10.dp))
-
-        val matches = stats?.recentMatches.orEmpty()
+        item(key = "stats") {
+            StatsPanel(stats = stats, loading = loading, error = error, onRetry = onRetry)
+        }
         if (!loading && matches.isEmpty()) {
-            EmptyHistory(modifier = Modifier.fillMaxWidth().weight(1f))
+            item(key = "empty") {
+                EmptyHistory(modifier = Modifier.fillMaxWidth().height(150.dp))
+            }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(matches, key = { it.matchId }) { match ->
-                    MatchCard(match, stats?.playerId.orEmpty())
-                }
+            items(matches, key = { it.matchId }) { match ->
+                MatchCard(match, stats?.playerId.orEmpty())
             }
         }
     }

@@ -113,14 +113,30 @@ fun GameScreen(
         if (game.phase != Phase.FINISHED) selected = emptySet()
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(PageBg)) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(PageBg)) {
+        val compactHeight = maxHeight < 500.dp
+        val pageHorizontalPadding = if (compactHeight) 10.dp else 16.dp
+        val pageVerticalPadding = if (compactHeight) 4.dp else 10.dp
+        val topBarHeight = if (compactHeight) 46.dp else 54.dp
+        val handAreaHeight = when {
+            game.phase == Phase.FINISHED && compactHeight -> 104.dp
+            game.phase == Phase.FINISHED -> 122.dp
+            compactHeight -> 96.dp
+            else -> 112.dp
+        }
+        val selfPanelWidth = if (compactHeight) 112.dp else 132.dp
+
         Image(
             painter = painterResource(R.drawable.table_table_felt),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop
         )
-        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = pageHorizontalPadding, vertical = pageVerticalPadding)
+        ) {
             GameTopBar(
                 state = state,
                 game = game,
@@ -130,7 +146,8 @@ fun GameScreen(
                 canDisband = state.isHost && game.phase == Phase.FINISHED,
                 onDisband = { showDisbandConfirm = true },
                 onVoiceEnabledChange = onVoiceEnabledChange,
-                onExit = { showExitConfirm = true }
+                onExit = { showExitConfirm = true },
+                height = topBarHeight
             )
             TriangleTable(
                 game = game,
@@ -145,7 +162,7 @@ fun GameScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (game.phase == Phase.FINISHED) 122.dp else 112.dp),
+                        .height(handAreaHeight),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -153,7 +170,7 @@ fun GameScreen(
                         seat = mySeat,
                         active = isMyTurn,
                         onClick = { onPlayerProfile(mySeat.index) },
-                        modifier = Modifier.width(132.dp)
+                        modifier = Modifier.width(selfPanelWidth)
                     )
                     if (game.phase == Phase.FINISHED) {
                         FinishedHandRows(
@@ -308,9 +325,10 @@ private fun GameTopBar(
     canDisband: Boolean,
     onDisband: () -> Unit,
     onVoiceEnabledChange: (Boolean) -> Unit,
-    onExit: () -> Unit
+    onExit: () -> Unit,
+    height: Dp
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(54.dp)) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(height)) {
         val compact = maxWidth < 820.dp
         Row(
             modifier = Modifier.align(Alignment.CenterStart),
@@ -628,6 +646,8 @@ private fun TriangleTable(
     BoxWithConstraints(modifier = modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
         val playWidth = (maxWidth * 0.25f).coerceIn(154.dp, 220.dp)
         val seatWidth = (maxWidth * 0.22f).coerceIn(128.dp, 184.dp)
+        val compactHeight = maxHeight < 220.dp
+        val playHeight = if (compactHeight) 70.dp else 88.dp
         Box(Modifier.fillMaxSize()) {
             if (leftOpponent != null) {
                 TablePlayer(
@@ -637,6 +657,7 @@ private fun TriangleTable(
                     active = game.turnIndex == leftOpponent.index && game.phase != Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
+                    playHeight = playHeight,
                     onPlayerProfile = onPlayerProfile,
                     modifier = Modifier.align(Alignment.TopStart)
                 )
@@ -649,6 +670,7 @@ private fun TriangleTable(
                     active = game.turnIndex == rightOpponent.index && game.phase != Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
+                    playHeight = playHeight,
                     onPlayerProfile = onPlayerProfile,
                     modifier = Modifier.align(Alignment.TopEnd)
                 )
@@ -660,6 +682,7 @@ private fun TriangleTable(
                     action = game.lastActionsBySeat.getOrNull(selfSeat.index),
                     active = game.turnIndex == selfSeat.index && game.phase != Phase.FINISHED,
                     width = playWidth,
+                    height = playHeight,
                     modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-2).dp)
                 )
             }
@@ -670,7 +693,7 @@ private fun TriangleTable(
                 onCall = onCall,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .offset(y = (-18).dp)
+                    .offset(y = if (compactHeight) (-8).dp else (-18).dp)
             )
         }
     }
@@ -684,6 +707,7 @@ private fun TablePlayer(
     active: Boolean,
     width: Dp,
     playWidth: Dp,
+    playHeight: Dp,
     onPlayerProfile: (Int) -> Unit,
     modifier: Modifier
 ) {
@@ -698,7 +722,14 @@ private fun TablePlayer(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(4.dp))
-        PlayPool(seat = seat, play = play, action = action, active = active, width = playWidth)
+        PlayPool(
+            seat = seat,
+            play = play,
+            action = action,
+            active = active,
+            width = playWidth,
+            height = playHeight
+        )
     }
 }
 
@@ -709,10 +740,11 @@ private fun PlayPool(
     action: SeatAction?,
     active: Boolean,
     width: Dp,
+    height: Dp = 88.dp,
     modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = modifier.width(width).height(88.dp),
+        modifier = modifier.width(width).height(height),
         color = if (action == null) Color(0x55204E4A) else Color(0xAA123E42),
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(

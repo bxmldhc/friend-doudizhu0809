@@ -59,22 +59,12 @@ object HandEvaluator {
         }
 
         if (groups.size == 2) {
-            val four = groups.firstOrNull { it.count == 4 }
-            if (four != null) {
-                val other = groups.first { it != four }
-                return when (other.count) {
-                    1 -> CardPattern(ComboType.FOUR_TWO_SINGLE, four.rank, 1, sorted)
-                    2 -> CardPattern(ComboType.FOUR_TWO_PAIR, four.rank, 1, sorted)
-                    else -> null
-                }
-            }
             val triple = groups.firstOrNull { it.count == 3 }
             if (triple != null) {
                 val other = groups.first { it != triple }
-                return when (other.count) {
-                    1 -> CardPattern(ComboType.TRIPLE_SINGLE, triple.rank, 1, sorted)
-                    2 -> CardPattern(ComboType.TRIPLE_PAIR, triple.rank, 1, sorted)
-                    else -> null
+                when (other.count) {
+                    1 -> return CardPattern(ComboType.TRIPLE_SINGLE, triple.rank, 1, sorted)
+                    2 -> return CardPattern(ComboType.TRIPLE_PAIR, triple.rank, 1, sorted)
                 }
             }
         }

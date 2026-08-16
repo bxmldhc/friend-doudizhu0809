@@ -105,13 +105,11 @@ object LegalPlayGenerator {
                 result.add(tripleCards)
 
                 val excluded = run.toSet()
-                val singleWings = pickWings(groups, excluded, length, pair = false)
-                if (singleWings != null) {
-                    result.add((tripleCards + singleWings).sorted())
+                for (wings in wingChoices(groups, excluded, length, pair = false)) {
+                    result.add((tripleCards + wings).sorted())
                 }
-                val pairWings = pickWings(groups, excluded, length, pair = true)
-                if (pairWings != null) {
-                    result.add((tripleCards + pairWings).sorted())
+                for (wings in wingChoices(groups, excluded, length, pair = true)) {
+                    result.add((tripleCards + wings).sorted())
                 }
             }
         }
@@ -126,22 +124,11 @@ object LegalPlayGenerator {
             val triple = list.take(3)
             val otherGroups = groups.filterKeys { it != rank }
 
-            val single = otherGroups.entries
-                .minByOrNull { it.key.order }
-                ?.value
-                ?.firstOrNull()
-            if (single != null) {
-                result.add((triple + single).sorted())
-            }
-
-            val pair = otherGroups
-                .filterValues { it.size >= 2 }
-                .entries
-                .minByOrNull { it.key.order }
-                ?.value
-                ?.take(2)
-            if (pair != null) {
-                result.add((triple + pair).sorted())
+            for ((_, cards) in otherGroups) {
+                result.add((triple + cards.first()).sorted())
+                if (cards.size >= 2) {
+                    result.add((triple + cards.take(2)).sorted())
+                }
             }
         }
     }
@@ -155,46 +142,44 @@ object LegalPlayGenerator {
             val bomb = list.take(4)
             val otherGroups = groups.filterKeys { it != rank }
 
-            val singleWings = pickDistinctRanks(otherGroups, 2, pair = false)
-            if (singleWings != null) {
-                result.add((bomb + singleWings).sorted())
+            for (wings in wingChoices(otherGroups, emptySet(), 2, pair = false)) {
+                result.add((bomb + wings).sorted())
             }
-            val pairWings = pickDistinctRanks(otherGroups, 2, pair = true)
-            if (pairWings != null) {
-                result.add((bomb + pairWings).sorted())
+            for (wings in wingChoices(otherGroups, emptySet(), 2, pair = true)) {
+                result.add((bomb + wings).sorted())
             }
         }
     }
 
-    private fun pickWings(
+    private fun wingChoices(
         groups: Map<Rank, List<Card>>,
         excluded: Set<Rank>,
         count: Int,
         pair: Boolean
-    ): List<Card>? {
+    ): List<List<Card>> {
         val eligible = groups
-            .filterKeys { it !in excluded && it != Rank.SMALL_JOKER && it != Rank.BIG_JOKER }
+            .filterKeys { it !in excluded }
             .filterValues { it.size >= if (pair) 2 else 1 }
-        if (eligible.size < count) return null
-        return eligible.entries
+            .entries
             .sortedBy { it.key.order }
-            .take(count)
-            .flatMap { it.value.take(if (pair) 2 else 1) }
-    }
+        if (eligible.size < count) return emptyList()
 
-    private fun pickDistinctRanks(
-        groups: Map<Rank, List<Card>>,
-        count: Int,
-        pair: Boolean
-    ): List<Card>? {
-        val eligible = groups
-            .filterKeys { if (pair) it != Rank.SMALL_JOKER && it != Rank.BIG_JOKER else true }
-            .filterValues { it.size >= if (pair) 2 else 1 }
-        if (eligible.size < count) return null
-        return eligible.entries
-            .sortedBy { it.key.order }
-            .take(count)
-            .flatMap { it.value.take(if (pair) 2 else 1) }
+        val result = mutableListOf<List<Card>>()
+        val selected = mutableListOf<List<Card>>()
+        fun choose(start: Int) {
+            if (selected.size == count) {
+                result.add(selected.flatten())
+                return
+            }
+            val remaining = count - selected.size
+            for (index in start..eligible.size - remaining) {
+                selected.add(eligible[index].value.take(if (pair) 2 else 1))
+                choose(index + 1)
+                selected.removeAt(selected.lastIndex)
+            }
+        }
+        choose(0)
+        return result
     }
 
     private fun isConsecutive(ranks: List<Rank>): Boolean {

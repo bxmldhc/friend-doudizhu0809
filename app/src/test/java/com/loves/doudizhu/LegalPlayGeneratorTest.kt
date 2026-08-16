@@ -38,4 +38,22 @@ class LegalPlayGeneratorTest {
         assertEquals(1, hint?.size)
         assertEquals(3, hint?.first()?.rank?.order)
     }
+
+    @Test
+    fun allGeneratedPlaysAreValidAndIncludeWingChoices() {
+        val hand = parseCards("3H 3S 3D 4H 4S 4D 5H 5S 6H 6S 7H 8H 9H X B")
+        val plays = LegalPlayGenerator.allPlays(hand)
+
+        assertTrue(plays.all { HandEvaluator.classify(it) != null })
+        val airplaneSingles = plays.filter {
+            HandEvaluator.classify(it)?.type == ComboType.AIRPLANE_SINGLE
+        }
+        val airplanePairs = plays.filter {
+            HandEvaluator.classify(it)?.type == ComboType.AIRPLANE_PAIR
+        }
+        assertEquals(21, airplaneSingles.size)
+        assertEquals(1, airplanePairs.size)
+        assertTrue(airplaneSingles.any { play -> play.any { it.rank.order == 16 } })
+        assertTrue(airplaneSingles.any { play -> play.any { it.rank.order == 17 } })
+    }
 }
