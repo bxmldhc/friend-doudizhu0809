@@ -655,6 +655,7 @@ private fun TriangleTable(
                     play = game.lastPlaysBySeat.getOrNull(leftOpponent.index).orEmpty(),
                     action = game.lastActionsBySeat.getOrNull(leftOpponent.index),
                     active = game.turnIndex == leftOpponent.index && game.phase != Phase.FINISHED,
+                    finished = game.phase == Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
                     playHeight = playHeight,
@@ -668,6 +669,7 @@ private fun TriangleTable(
                     play = game.lastPlaysBySeat.getOrNull(rightOpponent.index).orEmpty(),
                     action = game.lastActionsBySeat.getOrNull(rightOpponent.index),
                     active = game.turnIndex == rightOpponent.index && game.phase != Phase.FINISHED,
+                    finished = game.phase == Phase.FINISHED,
                     width = seatWidth,
                     playWidth = playWidth,
                     playHeight = playHeight,
@@ -705,6 +707,7 @@ private fun TablePlayer(
     play: List<Card>,
     action: SeatAction?,
     active: Boolean,
+    finished: Boolean,
     width: Dp,
     playWidth: Dp,
     playHeight: Dp,
@@ -722,14 +725,86 @@ private fun TablePlayer(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(4.dp))
-        PlayPool(
-            seat = seat,
-            play = play,
-            action = action,
-            active = active,
-            width = playWidth,
-            height = playHeight
-        )
+        if (finished) {
+            OpponentFinishedHand(
+                cards = seat.hand,
+                width = playWidth,
+                height = playHeight
+            )
+        } else {
+            PlayPool(
+                seat = seat,
+                play = play,
+                action = action,
+                active = active,
+                width = playWidth,
+                height = playHeight
+            )
+        }
+    }
+}
+
+@Composable
+private fun OpponentFinishedHand(
+    cards: List<Card>,
+    width: Dp,
+    height: Dp
+) {
+    val sortedCards = cards.sortedDescending()
+    Surface(
+        modifier = Modifier.width(width).height(height),
+        color = Color(0xAA123E42),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Wax.copy(alpha = .55f))
+    ) {
+        if (sortedCards.isEmpty()) {
+            Box(contentAlignment = Alignment.Center) {
+                Text("已出完", color = Wax, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        } else {
+            val rows = if (sortedCards.size > 9) {
+                val firstRowSize = (sortedCards.size + 1) / 2
+                listOf(
+                    sortedCards.take(firstRowSize),
+                    sortedCards.drop(firstRowSize)
+                )
+            } else {
+                listOf(sortedCards)
+            }
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 3.dp)
+            ) {
+                val availableWidth = maxWidth
+                val rowHeight = maxHeight / rows.size
+                val cardWidth = (rowHeight / 1.35f).coerceIn(22.dp, 30.dp)
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    rows.forEach { rowCards ->
+                        val step = if (rowCards.size == 1) {
+                            0.dp
+                        } else {
+                            ((availableWidth - cardWidth) / (rowCards.size - 1))
+                                .coerceAtLeast(7.dp)
+                                .coerceAtMost(cardWidth * .62f)
+                        }
+                        Box(
+                            modifier = Modifier.fillMaxWidth().height(rowHeight),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CardRow(
+                                cards = rowCards,
+                                width = cardWidth,
+                                height = cardWidth * 1.35f,
+                                step = step
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

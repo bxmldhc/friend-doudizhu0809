@@ -101,8 +101,10 @@ export function serializeState(
       name: s.name,
       isHuman: s.isHuman,
       isAway: s.isAway === true,
-      // Only expose the viewer's cards. Opponents remain count-only on clients.
-      hand: viewerSeat === s.index ? s.hand.map(cardNotation) : [],
+      // Opponent cards stay hidden during play and are revealed after the round ends.
+      hand: viewerSeat === s.index || state.phase === "FINISHED"
+        ? s.hand.map(cardNotation)
+        : [],
       handCount: s.hand.length,
       isLandlord: s.isLandlord,
       score: s.score,

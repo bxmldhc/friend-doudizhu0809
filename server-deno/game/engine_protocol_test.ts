@@ -145,6 +145,37 @@ Deno.test("协议往返保留公开记牌并兼容旧快照", () => {
   }
 });
 
+Deno.test("协议仅在牌局结束后公开三家剩余手牌", () => {
+  const playing = playingState();
+  const playingSeats = serializeState(playing, 0).seats as Record<
+    string,
+    unknown
+  >[];
+  if (
+    (playingSeats[0].hand as unknown[]).length !== 2 ||
+    (playingSeats[1].hand as unknown[]).length !== 0 ||
+    (playingSeats[2].hand as unknown[]).length !== 0
+  ) {
+    throw new Error("进行中必须只向当前玩家公开自己的手牌");
+  }
+
+  const finished: EngineState = {
+    ...playing,
+    phase: "FINISHED",
+    winnerIndex: 0,
+    scoreDelta: [2, -1, -1],
+  };
+  const finishedSeats = serializeState(finished, null).seats as Record<
+    string,
+    unknown
+  >[];
+  if (
+    finishedSeats.some((seat) => (seat.hand as unknown[]).length !== 2)
+  ) {
+    throw new Error("牌局结束后应向所有客户端公开三家剩余手牌");
+  }
+});
+
 Deno.test("两次 PASS 只清空裁判上一手，保留三家本轮视觉出牌", () => {
   const engine = new DoudizhuEngine({ humanCount: 3, difficulty: "MEDIUM" });
   engine.state = playingState();
