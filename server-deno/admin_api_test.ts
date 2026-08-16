@@ -30,6 +30,7 @@ const emptyRooms = {
       gameNumber: 2,
       difficulty: "HARD",
       aiCount: 1,
+      actionTimeoutSeconds: 20,
       connectedHumanCount: 1,
       occupiedHumanCount: 2,
       hostSeat: 0,
@@ -79,10 +80,13 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
   const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 7);
   const adminNickname = `admin${suffix}`;
   const userNickname = `user${suffix}`;
+  const managedNickname = `mgr${suffix}`;
   Deno.env.set("ADMIN_NICKNAMES", `${adminNickname},dlc`);
   const adminPassword = "Admin123!";
   const userPassword = "User123!";
   const newPassword = "Changed456!";
+  const temporaryPassword = "Temporary789!";
+  const managedPassword = "Managed456!";
   const cleanup: Array<{
     accountId: string;
     nicknameKey: string;
@@ -235,12 +239,110 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
         "注册关闭错误码",
       );
 
+      const invalidPassword = await requestApi("/api/admin/accounts", {
+        method: "POST",
+        token: adminToken,
+        body: { nickname: managedNickname, temporaryPassword: "short" },
+      });
+      assertEquals(
+        invalidPassword.response.status,
+        400,
+        "管理员弱密码创建状态码",
+      );
+      assertEquals(
+        invalidPassword.body.error?.code,
+        "INVALID_PASSWORD",
+        "管理员弱密码创建错误码",
+      );
+
+      const managed = await requestApi("/api/admin/accounts", {
+        method: "POST",
+        token: adminToken,
+        body: { nickname: managedNickname, temporaryPassword },
+      });
+      assertEquals(managed.response.status, 201, "管理员创建账号状态码");
+      const managedAccount = asRecord(
+        managed.body.data?.account,
+        "管理员创建的账号",
+      );
+      const managedId = asString(
+        managedAccount.accountId,
+        "管理员创建账号 accountId",
+      );
+      assertEquals(
+        managedAccount.mustChangePassword,
+        true,
+        "管理员创建账号必须修改临时密码",
+      );
+      cleanup.push({
+        accountId: managedId,
+        nicknameKey: managedNickname.toLocaleLowerCase("zh-CN"),
+        tokens: [],
+      });
+      assertNoSecrets(managed.body);
+
+      const duplicate = await requestApi("/api/admin/accounts", {
+        method: "POST",
+        token: adminToken,
+        body: { nickname: managedNickname, temporaryPassword },
+      });
+      assertEquals(duplicate.response.status, 409, "管理员创建重名账号状态码");
+      assertEquals(
+        duplicate.body.error?.code,
+        "NICKNAME_TAKEN",
+        "管理员创建重名账号错误码",
+      );
+
       const enabled = await requestApi("/api/admin/registration", {
         method: "POST",
         token: adminToken,
         body: { enabled: true },
       });
       assertEquals(enabled.body.data?.enabled, true, "恢复注册结果");
+    });
+
+    await t.step("临时密码账号登录后必须改密，改密后解除限制", async () => {
+      const managedLogin = await requestApi("/api/auth/login", {
+        method: "POST",
+        body: { nickname: managedNickname, password: temporaryPassword },
+      });
+      assertEquals(managedLogin.response.status, 200, "临时密码登录状态码");
+      const managedAccount = asRecord(
+        managedLogin.body.data?.account,
+        "临时密码登录账号",
+      );
+      assertEquals(
+        managedAccount.mustChangePassword,
+        true,
+        "临时密码登录响应必须包含改密标记",
+      );
+      const managedToken = asString(
+        managedLogin.body.data?.token,
+        "临时密码账号 token",
+      );
+      cleanup[2].tokens.push(managedToken);
+
+      const changed = await requestApi("/api/auth/change-password", {
+        method: "POST",
+        token: managedToken,
+        body: {
+          currentPassword: temporaryPassword,
+          newPassword: managedPassword,
+        },
+      });
+      assertEquals(changed.response.status, 200, "临时密码改密状态码");
+      const changedAccount = asRecord(
+        changed.body.data?.account,
+        "临时密码改密账号",
+      );
+      assertEquals(
+        changedAccount.mustChangePassword,
+        false,
+        "自行改密后必须解除改密标记",
+      );
+      cleanup[2].tokens.push(
+        asString(changed.body.data?.token, "临时密码改密后的 token"),
+      );
     });
 
     await t.step("管理员可禁用恢复账号但不能禁用自己", async () => {
@@ -350,6 +452,11 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
         true,
         "旧会话失效标记",
       );
+      assertEquals(
+        asRecord(reset.body.data?.account, "重置密码账号").mustChangePassword,
+        true,
+        "管理员重置后的密码应标记为临时密码",
+      );
       assertNoSecrets(reset.body);
 
       if (
@@ -375,6 +482,11 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
         false,
         "客户端自报权限不应改变账号角色",
       );
+      assertEquals(
+        newAccount.mustChangePassword,
+        true,
+        "使用管理员重置密码登录后必须自行改密",
+      );
       cleanup[1].tokens.push(
         asString(newLogin.body.data?.token, "重置后 token"),
       );
@@ -396,6 +508,7 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
           "REGISTRATION_ENABLED",
           "ACCOUNT_DISABLED",
           "ACCOUNT_ENABLED",
+          "ACCOUNT_CREATED",
           "PASSWORD_RESET",
         ]
       ) {

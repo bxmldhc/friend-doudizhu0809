@@ -23,13 +23,19 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -57,9 +63,11 @@ fun LobbyScreen(
     state: GameUiState.Lobby,
     onStart: () -> Unit,
     onRetry: () -> Unit,
-    onExit: () -> Unit
+    onExit: () -> Unit,
+    onDisband: () -> Unit
 ) {
     val context = LocalContext.current
+    var showDisbandConfirm by remember { mutableStateOf(false) }
     val humanPlayers = state.players
         .take(3)
         .filter { it.isNotBlank() && it != "等待加入" }
@@ -174,7 +182,9 @@ fun LobbyScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "本局配置：${state.aiCount} 个 AI · 真人 ${humanPlayers.size}/${state.requiredHumans}",
+                        "本局配置：${state.aiCount} 个 AI · ${difficultyLabel(state.config.difficulty)}" +
+                            " · ${state.config.actionTimeoutSeconds} 秒 · 真人 " +
+                            "${humanPlayers.size}/${state.requiredHumans}",
                         color = Muted,
                         fontSize = 12.sp
                     )
@@ -192,14 +202,25 @@ fun LobbyScreen(
         }
         Spacer(Modifier.height(10.dp))
         if (state.isHost) {
-            Button(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = Coral
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("开始游戏", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                OutlinedButton(
+                    onClick = { showDisbandConfirm = true },
+                    modifier = Modifier.weight(0.42f).height(48.dp)
+                ) {
+                    Text("解散房间")
+                }
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.weight(0.58f).height(48.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Coral
+                    )
+                ) {
+                    Text("开始游戏", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
             }
         } else {
             OutlinedButton(
@@ -211,6 +232,37 @@ fun LobbyScreen(
             }
         }
     }
+    if (showDisbandConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisbandConfirm = false },
+            title = { Text("解散这个房间？") },
+            text = { Text("房间和场内分数将被清除，其他玩家会返回首页。此操作无法撤销。") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDisbandConfirm = false
+                        onDisband()
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Coral
+                    )
+                ) {
+                    Text("确认解散")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisbandConfirm = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+}
+
+private fun difficultyLabel(difficulty: com.loves.doudizhu.model.AiDifficulty): String = when (difficulty) {
+    com.loves.doudizhu.model.AiDifficulty.EASY -> "简单 AI"
+    com.loves.doudizhu.model.AiDifficulty.MEDIUM -> "普通 AI"
+    com.loves.doudizhu.model.AiDifficulty.HARD -> "困难 AI"
 }
 
 private data class LobbySeatData(val name: String, val isHuman: Boolean?)

@@ -14,6 +14,7 @@ export type ClientMessage =
     name: string;
     difficulty: Difficulty;
     aiCount?: number;
+    actionTimeoutSeconds?: number;
     playerId?: string;
     authToken?: string;
   }
@@ -28,6 +29,8 @@ export type ClientMessage =
   | { type: "START" }
   | { type: "RESTART" }
   | { type: "READY"; ready: boolean }
+  | { type: "DISBAND" }
+  | { type: "QUICK_MESSAGE"; messageId: string }
   | { type: "LEAVE" }
   | { type: "ACTION"; seat: number; action: RemoteAction }
   | { type: "PING" };

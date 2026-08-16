@@ -29,7 +29,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        gameViewModel.handleInvite(intent.dataString)
+        if (intent.action == Intent.ACTION_VIEW) {
+            gameViewModel.handleInvite(intent.dataString)
+        }
     }
 
     override fun onResume() {

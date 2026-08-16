@@ -7,6 +7,7 @@ export interface PublicAccount {
   role: "USER" | "ADMIN";
   isAdmin: boolean;
   disabled: boolean;
+  mustChangePassword: boolean;
 }
 
 interface StoredAccount {
@@ -20,6 +21,7 @@ interface StoredAccount {
   sessionVersion?: number;
   disabled?: boolean;
   disabledAt?: number | null;
+  mustChangePassword?: boolean;
 }
 
 interface StoredSession {
@@ -157,6 +159,58 @@ export async function registerAccount(
     );
   }
   return await createSession(account);
+}
+
+export async function createAccountForAdmin(
+  rawNickname: string,
+  temporaryPassword: string,
+): Promise<PublicAccount> {
+  const { nickname, nicknameKey } = validateNickname(rawNickname);
+  validatePassword(temporaryPassword);
+
+  const nicknameEntry = await kv.get<string>([
+    "accountByNickname",
+    nicknameKey,
+  ]);
+  if (nicknameEntry.value) {
+    throw new AuthError("该昵称已经被使用", "NICKNAME_TAKEN", 409);
+  }
+
+  const accountId = crypto.randomUUID();
+  const createdAt = Date.now();
+  const iterations = configuredPasswordIterations();
+  const passwordSaltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const passwordHashBytes = await derivePasswordHash(
+    temporaryPassword,
+    passwordSaltBytes,
+    iterations,
+  );
+  const account: StoredAccount = {
+    accountId,
+    nickname,
+    nicknameKey,
+    passwordHash: bytesToBase64(passwordHashBytes),
+    passwordSalt: bytesToBase64(passwordSaltBytes),
+    passwordIterations: iterations,
+    sessionVersion: 0,
+    createdAt,
+    mustChangePassword: true,
+  };
+
+  const result = await kv.atomic()
+    .check(nicknameEntry)
+    .set(["accounts", accountId], account)
+    .set(["accountByNickname", nicknameKey], accountId)
+    .commit();
+  if (!result.ok) {
+    if (
+      (await kv.get<string>(["accountByNickname", nicknameKey])).value
+    ) {
+      throw new AuthError("该昵称已经被使用", "NICKNAME_TAKEN", 409);
+    }
+    throw new AuthError("账号创建失败，请重试", "ACCOUNT_CREATE_FAILED", 409);
+  }
+  return toPublicAccount(account);
 }
 
 export async function loginAccount(
@@ -306,6 +360,7 @@ export async function resetAccountPassword(
     passwordSalt: bytesToBase64(passwordSaltBytes),
     passwordIterations: iterations,
     sessionVersion: (account.sessionVersion ?? 0) + 1,
+    mustChangePassword: true,
   };
   const result = await kv.atomic().check(entry).set(key, updated).commit();
   if (!result.ok) {
@@ -335,6 +390,7 @@ export async function changeOwnPassword(
 
   const updated = await withNewPassword(account, newPassword);
   updated.sessionVersion = (account.sessionVersion ?? 0) + 1;
+  updated.mustChangePassword = false;
   const replacement = newStoredSession(updated);
   const replacementToken = randomToken();
   const result = await kv.atomic()
@@ -464,6 +520,7 @@ function toPublicAccount(account: StoredAccount): PublicAccount {
     role: isAdmin ? "ADMIN" : "USER",
     isAdmin,
     disabled: Boolean(account.disabled),
+    mustChangePassword: Boolean(account.mustChangePassword),
   };
 }
 

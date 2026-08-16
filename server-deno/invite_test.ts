@@ -25,7 +25,11 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
       const html = await response.text();
 
       assertEquals(response.status, 200, "邀请页状态码");
-      assertIncludes(response.headers.get("content-type") ?? "", "text/html", "内容类型");
+      assertIncludes(
+        response.headers.get("content-type") ?? "",
+        "text/html",
+        "内容类型",
+      );
       assertIncludes(html, "好友斗地主", "页面标题");
       assertIncludes(html, "123456", "房号");
       assertIncludes(
@@ -38,7 +42,27 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
         "action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE",
         "Android intent 行为",
       );
+      assertNotIncludes(
+        html,
+        "browser_fallback_url",
+        "intent 不应提前刷新页面并打断自定义 scheme 回退",
+      );
       assertIncludes(html, "friendddz://join?room=123456", "备用应用地址");
+      assertIncludes(
+        html,
+        "window.location.href = intentUrl",
+        "点击后尝试 Android intent",
+      );
+      assertIncludes(
+        html,
+        "window.location.href = appUrl",
+        "intent 未唤起时尝试自定义 scheme",
+      );
+      assertIncludes(
+        html,
+        'document.addEventListener("visibilitychange"',
+        "应用打开后取消备用跳转",
+      );
       assertIncludes(
         html,
         "http://games.example:18080/downloads/friend-doudizhu-1.2.0.apk",

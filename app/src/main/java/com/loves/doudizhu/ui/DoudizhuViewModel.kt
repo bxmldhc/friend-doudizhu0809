@@ -7,6 +7,7 @@ import com.loves.doudizhu.BuildConfig
 import com.loves.doudizhu.audio.AudioCue
 import com.loves.doudizhu.audio.VoiceEventReducer
 import com.loves.doudizhu.logic.EngineState
+import com.loves.doudizhu.model.AiDifficulty
 import com.loves.doudizhu.model.Card
 import com.loves.doudizhu.model.GameConfig
 import com.loves.doudizhu.network.AccountStats
@@ -43,6 +44,12 @@ enum class AppConnectionState {
     ONLINE,
     RECONNECTING
 }
+
+data class QuickMessageUi(
+    val seat: Int,
+    val messageId: String,
+    val at: Long
+)
 
 enum class ConnectingAction {
     RETRY,
@@ -89,7 +96,9 @@ sealed interface GameUiState {
     data class CreateRoom(
         val nickname: String,
         val serverUrl: String,
-        val aiCount: Int = 2
+        val aiCount: Int = 2,
+        val difficulty: AiDifficulty = AiDifficulty.MEDIUM,
+        val actionTimeoutSeconds: Int = 20
     ) : GameUiState
 
     data class JoinRoom(
@@ -140,6 +149,7 @@ sealed interface GameUiState {
         val accountId: String,
         val nickname: String,
         val isAdmin: Boolean,
+        val mustChangePassword: Boolean = false,
         val loadingAction: String? = null,
         val error: String? = null
     ) : GameUiState
@@ -153,6 +163,7 @@ sealed interface GameUiState {
         val loading: Boolean = true,
         val error: String? = null,
         val query: String = "",
+        val creatingAccount: Boolean = false,
         val resettingAccountId: String? = null,
         val updatingAccountId: String? = null,
         val updatingRegistration: Boolean = false
@@ -179,6 +190,9 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     private val _playerProfile = MutableStateFlow<PlayerProfileUiState>(PlayerProfileUiState.Hidden)
     val playerProfile: StateFlow<PlayerProfileUiState> = _playerProfile.asStateFlow()
+
+    private val _quickMessage = MutableStateFlow<QuickMessageUi?>(null)
+    val quickMessage: StateFlow<QuickMessageUi?> = _quickMessage.asStateFlow()
 
     private val preferences = application.getSharedPreferences("friend_doudizhu", 0)
     private val authApi = AuthApi()
@@ -208,6 +222,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private var voiceEnabled = preferences.getBoolean("voiceEnabled", true)
     private var updateChecked = false
     private var reconnectJob: Job? = null
+    private var quickMessageJob: Job? = null
     private var reconnectAttempt = 0
     private var allowAutomaticReconnect = true
     private var authVerifiedThisProcess = false
@@ -351,12 +366,20 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     fun openCreateRoom() {
         val session = authSession ?: return showAuth()
+        if (!requirePasswordChanged(session)) return
         val home = _uiState.value as? GameUiState.Home ?: return
-        _uiState.value = GameUiState.CreateRoom(session.nickname, home.serverUrl, config.aiCount)
+        _uiState.value = GameUiState.CreateRoom(
+            nickname = session.nickname,
+            serverUrl = home.serverUrl,
+            aiCount = config.aiCount,
+            difficulty = config.difficulty,
+            actionTimeoutSeconds = config.actionTimeoutSeconds
+        )
     }
 
     fun openJoinRoom() {
         val session = authSession ?: return showAuth()
+        if (!requirePasswordChanged(session)) return
         val home = _uiState.value as? GameUiState.Home ?: return
         _uiState.value = GameUiState.JoinRoom(
             nickname = session.nickname,
@@ -375,7 +398,13 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = GameUiState.Account(
             accountId = session.accountId,
             nickname = session.nickname,
-            isAdmin = session.isAdmin
+            isAdmin = session.isAdmin,
+            mustChangePassword = session.mustChangePassword,
+            error = if (session.mustChangePassword) {
+                "当前使用的是临时密码。请先修改密码，再创建、加入或恢复房间。"
+            } else {
+                null
+            }
         )
     }
 
@@ -399,8 +428,16 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 is ApiResult.Success -> {
                     saveAuthSession(result.data)
                     val state = _uiState.value as? GameUiState.Account ?: return@launch
-                    _uiState.value = state.copy(loadingAction = null)
-                    _toast.value = "密码已修改，其他设备已退出"
+                    _uiState.value = state.copy(
+                        mustChangePassword = result.data.mustChangePassword,
+                        loadingAction = null,
+                        error = null
+                    )
+                    _toast.value = if (session.mustChangePassword) {
+                        "密码已修改，现在可以进入房间"
+                    } else {
+                        "密码已修改，其他设备已退出"
+                    }
                 }
                 is ApiResult.Failure -> {
                     if (result.isUnauthorized && result.code != "CURRENT_PASSWORD_INVALID") {
@@ -462,6 +499,55 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         val current = _uiState.value as? GameUiState.Admin ?: return
         _uiState.value = current.copy(query = query, loading = true, error = null)
         loadAdmin(query)
+    }
+
+    fun createAdminAccount(nickname: String, temporaryPassword: String) {
+        val session = authSession ?: return showAuth()
+        if (!session.isAdmin) return
+        val current = _uiState.value as? GameUiState.Admin ?: return
+        val cleanNickname = nickname.trim()
+        when {
+            cleanNickname.length !in 2..12 -> {
+                _uiState.value = current.copy(error = "账号名需要 2 到 12 个字符")
+                return
+            }
+            temporaryPassword.length !in 6..64 -> {
+                _uiState.value = current.copy(error = "临时密码需要 6 到 64 个字符")
+                return
+            }
+        }
+        _uiState.value = current.copy(creatingAccount = true, error = null)
+        viewModelScope.launch {
+            when (
+                val result = authApi.createAdminAccount(
+                    httpBaseUrl(lastServerUrl),
+                    session.authToken,
+                    cleanNickname,
+                    temporaryPassword
+                )
+            ) {
+                is ApiResult.Success -> {
+                    _toast.value = "已创建 ${result.data.nickname}，首次登录需要修改密码"
+                    loadAdmin((_uiState.value as? GameUiState.Admin)?.query.orEmpty())
+                }
+                is ApiResult.Failure -> {
+                    if (result.isUnauthorized) {
+                        handleAuthenticationExpired()
+                    } else {
+                        val state = _uiState.value as? GameUiState.Admin ?: return@launch
+                        _uiState.value = state.copy(
+                            creatingAccount = false,
+                            error = when (result.code?.uppercase()) {
+                                "NICKNAME_TAKEN" -> "该账号名已经被使用"
+                                "INVALID_NICKNAME" -> "账号名需要 2 到 12 个有效字符"
+                                "INVALID_PASSWORD" -> "临时密码需要 6 到 64 个字符"
+                                else -> result.message
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun resetAdminPassword(accountId: String, newPassword: String) {
@@ -604,6 +690,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     val current = _uiState.value as? GameUiState.Admin ?: return@launch
                     _uiState.value = current.copy(
                         loading = false,
+                        creatingAccount = false,
                         resettingAccountId = null,
                         updatingAccountId = null,
                         updatingRegistration = false,
@@ -620,6 +707,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 registrationEnabled = (registration as ApiResult.Success).data.enabled,
                 auditRecords = (audit as ApiResult.Success).data.records,
                 loading = false,
+                creatingAccount = false,
                 resettingAccountId = null,
                 updatingAccountId = null,
                 updatingRegistration = false,
@@ -769,12 +857,18 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = homeState()
     }
 
-    fun createRoom(serverUrl: String, aiCount: Int) {
+    fun createRoom(
+        serverUrl: String,
+        aiCount: Int,
+        difficulty: AiDifficulty,
+        actionTimeoutSeconds: Int
+    ) {
         val session = authSession ?: return showAuth()
         config = GameConfig(
             humanCount = 3 - aiCount.coerceIn(0, 2),
-            difficulty = config.difficulty,
-            mode = config.mode
+            difficulty = difficulty,
+            mode = config.mode,
+            actionTimeoutSeconds = actionTimeoutSeconds
         ).normalized()
         connect(session.nickname, serverUrl, host = true, room = null)
     }
@@ -806,6 +900,18 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     fun setReady(ready: Boolean) {
         onlineClient?.setReady(ready)
+    }
+
+    fun disbandRoom() {
+        if (!isHost) {
+            _toast.value = "只有房主可以解散房间"
+            return
+        }
+        onlineClient?.disbandRoom()
+    }
+
+    fun sendQuickMessage(messageId: String) {
+        onlineClient?.sendQuickMessage(messageId)
     }
 
     fun retryConnection() {
@@ -885,6 +991,11 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun continueAfterAuthentication() {
+        val session = authSession
+        if (session?.mustChangePassword == true) {
+            openAccount()
+            return
+        }
         val room = pendingInviteRoom
         if (room != null) {
             joinRoom(room, lastServerUrl)
@@ -928,6 +1039,13 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private fun requirePasswordChanged(session: AuthSession): Boolean {
+        if (!session.mustChangePassword) return true
+        _toast.value = "请先在账号页修改临时密码"
+        openAccount()
+        return false
+    }
+
     private fun connect(
         nickname: String,
         serverUrl: String,
@@ -936,6 +1054,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         resumeCredential: String? = null
     ) {
         val session = authSession ?: return showAuth()
+        if (!requirePasswordChanged(session)) return
         reconnectJob?.cancel()
         allowAutomaticReconnect = true
         val cleanName = session.nickname.ifBlank { nickname.trim().ifBlank { "朋友" } }
@@ -957,7 +1076,16 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             name = cleanName,
             playerId = session.accountId.ifBlank { legacyPlayerId },
             authToken = session.authToken,
-            onRoom = { code, seat, hostSeat, token, players, aiCount, requiredHumans ->
+            onRoom = {
+                    code,
+                    seat,
+                    hostSeat,
+                    token,
+                    players,
+                    aiCount,
+                    requiredHumans,
+                    difficulty,
+                    actionTimeoutSeconds ->
                 if (onlineClient === nextClient) {
                     if (voiceRoomCode != code) {
                         voiceRoomCode = code
@@ -983,7 +1111,11 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     }
                     isHost = seat == hostSeat
                     playerNames = players
-                    config = config.copy(humanCount = requiredHumans.coerceIn(1, 3)).normalized()
+                    config = config.copy(
+                        humanCount = requiredHumans.coerceIn(1, 3),
+                        difficulty = difficulty,
+                        actionTimeoutSeconds = actionTimeoutSeconds
+                    ).normalized()
                     connection = AppConnectionState.ONLINE
                     reconnectAttempt = 0
                     val current = _uiState.value
@@ -1028,6 +1160,26 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                         isHost = isHost,
                         voiceEnabled = voiceEnabled
                     )
+                }
+            },
+            onRoomDisbanded = { reason ->
+                if (onlineClient === nextClient) {
+                    clearRoomAfterDisband()
+                    _toast.value = reason.ifBlank { "房主已解散房间" }
+                    _uiState.value = homeState()
+                }
+            },
+            onQuickMessage = { seat, messageId, at ->
+                if (onlineClient === nextClient) {
+                    _quickMessage.value = QuickMessageUi(seat, messageId, at)
+                    quickMessageJob?.cancel()
+                    quickMessageJob = viewModelScope.launch {
+                        delay(3_000)
+                        val currentMessage = _quickMessage.value
+                        if (currentMessage?.seat == seat && currentMessage.at == at) {
+                            _quickMessage.value = null
+                        }
+                    }
                 }
             },
             onServerError = { error ->
@@ -1083,7 +1235,11 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 if (!resumeCredential.isNullOrBlank() && room != null) {
                     nextClient.reconnectRoom(room, resumeCredential)
                 } else if (room == null) {
-                    nextClient.createRoom(config.difficulty, config.aiCount)
+                    nextClient.createRoom(
+                        config.difficulty,
+                        config.aiCount,
+                        config.actionTimeoutSeconds
+                    )
                 } else {
                     nextClient.joinRoom(room)
                 }
@@ -1108,6 +1264,27 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         voiceRoomCode = ""
         voiceEventReducer.reset("")
         lastRequestedRoom = null
+        connection = AppConnectionState.OFFLINE
+    }
+
+    private fun clearRoomAfterDisband() {
+        reconnectJob?.cancel()
+        quickMessageJob?.cancel()
+        allowAutomaticReconnect = false
+        val oldRoom = roomCode
+        val oldUrl = lastServerUrl
+        onlineClient?.close()
+        onlineClient = null
+        if (oldRoom.isNotBlank()) {
+            preferences.edit().remove(resumeKey(oldRoom, oldUrl)).apply()
+        }
+        clearResumeRecord()
+        resumeToken = null
+        roomCode = ""
+        voiceRoomCode = ""
+        voiceEventReducer.reset("")
+        lastRequestedRoom = null
+        _quickMessage.value = null
         connection = AppConnectionState.OFFLINE
     }
 
@@ -1142,6 +1319,14 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private fun handleServerError(error: ServerError) {
         when (error.code?.uppercase()) {
             "AUTH_REQUIRED", "UNAUTHORIZED", "INVALID_TOKEN" -> handleAuthenticationExpired()
+            "PASSWORD_CHANGE_REQUIRED" -> {
+                stopConnection()
+                authSession?.let { session ->
+                    saveAuthSession(session.copy(mustChangePassword = true))
+                }
+                openAccount()
+                _toast.value = error.message.ifBlank { "请先修改临时密码" }
+            }
             "ACCOUNT_DISABLED" -> {
                 stopConnection()
                 clearAuthSession()
@@ -1267,6 +1452,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             .putString("nickname", session.nickname)
             .putString("accountRole", session.role.name)
             .putBoolean("isAdmin", session.isAdmin)
+            .putBoolean("mustChangePassword", session.mustChangePassword)
             .apply()
     }
 
@@ -1284,7 +1470,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 role = com.loves.doudizhu.network.AccountRole.from(
                     preferences.getString("accountRole", null)
                 ),
-                isAdmin = preferences.getBoolean("isAdmin", false)
+                isAdmin = preferences.getBoolean("isAdmin", false),
+                mustChangePassword = preferences.getBoolean("mustChangePassword", false)
             )
         }
     }
@@ -1298,6 +1485,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             .remove("nickname")
             .remove("accountRole")
             .remove("isAdmin")
+            .remove("mustChangePassword")
             .apply()
     }
 

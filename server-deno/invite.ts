@@ -19,14 +19,12 @@ export async function handleInviteRequest(
   }
 
   const appUrl = `friendddz://join?room=${encodeURIComponent(roomCode)}`;
-  const fallbackUrl = new URL(`/invite/${roomCode}`, url.origin).toString();
   const intentUrl = [
     `intent://join?room=${encodeURIComponent(roomCode)}#Intent`,
     "scheme=friendddz",
     `package=${ANDROID_PACKAGE}`,
     "action=android.intent.action.VIEW",
     "category=android.intent.category.BROWSABLE",
-    `S.browser_fallback_url=${encodeURIComponent(fallbackUrl)}`,
     "end",
   ].join(";");
   const downloadUrl = await latestApkUrl(url.origin);
@@ -75,6 +73,8 @@ function renderInvitePage(
   appUrl: string,
   downloadUrl: string,
 ): string {
+  const intentUrlJson = JSON.stringify(intentUrl);
+  const appUrlJson = JSON.stringify(appUrl);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -134,7 +134,7 @@ function renderInvitePage(
     <h1>好友斗地主</h1>
     <p>朋友邀请你加入房间</p>
     <strong>${roomCode}</strong>
-    <a id="open-app" href="${intentUrl}">打开应用并加入房间</a>
+    <a id="open-app" href="${intentUrl}" role="button">打开应用并加入房间</a>
     <a class="secondary" href="${appUrl}">备用打开方式</a>
     <a class="secondary" href="${downloadUrl}">下载最新版本</a>
     <p id="open-status" aria-live="polite"></p>
@@ -143,13 +143,33 @@ function renderInvitePage(
   <script>
     var openButton = document.getElementById("open-app");
     var status = document.getElementById("open-status");
-    openButton.addEventListener("click", function () {
+    var intentUrl = ${intentUrlJson};
+    var appUrl = ${appUrlJson};
+    var fallbackTimer = null;
+
+    function cancelFallback() {
+      if (fallbackTimer !== null) {
+        window.clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    }
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) cancelFallback();
+    });
+    window.addEventListener("pagehide", cancelFallback);
+
+    openButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      cancelFallback();
       status.textContent = "正在打开应用…";
-      window.setTimeout(function () {
+      fallbackTimer = window.setTimeout(function () {
         if (!document.hidden) {
-          status.textContent = "没有打开？请允许浏览器打开外部应用，或点击备用打开方式。";
+          status.textContent = "正在尝试备用打开方式…";
+          window.location.href = appUrl;
         }
-      }, 1200);
+      }, 800);
+      window.location.href = intentUrl;
     });
   </script>
 </body>

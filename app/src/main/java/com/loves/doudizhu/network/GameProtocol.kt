@@ -24,9 +24,17 @@ sealed interface NetMessage {
         val resumeToken: String?,
         val players: List<String>,
         val aiCount: Int,
-        val requiredHumans: Int
+        val requiredHumans: Int,
+        val difficulty: AiDifficulty,
+        val actionTimeoutSeconds: Int
     ) : NetMessage
     data class State(val state: EngineState) : NetMessage
+    data class RoomDisbanded(val reason: String) : NetMessage
+    data class QuickMessage(
+        val seat: Int,
+        val messageId: String,
+        val at: Long
+    ) : NetMessage
     data class Error(val error: ServerError) : NetMessage {
         val code: String?
             get() = error.code
@@ -43,7 +51,8 @@ object GameProtocol {
         playerId: String,
         authToken: String?,
         difficulty: AiDifficulty,
-        aiCount: Int
+        aiCount: Int,
+        actionTimeoutSeconds: Int
     ): String {
         val obj = JSONObject()
         obj.put("type", "CREATE")
@@ -52,6 +61,10 @@ object GameProtocol {
         if (!authToken.isNullOrBlank()) obj.put("authToken", authToken)
         obj.put("difficulty", difficulty.name)
         obj.put("aiCount", aiCount.coerceIn(0, 2))
+        obj.put(
+            "actionTimeoutSeconds",
+            actionTimeoutSeconds.takeIf { it in setOf(15, 20, 30, 45) } ?: 20
+        )
         return obj.toString()
     }
 
@@ -87,6 +100,15 @@ object GameProtocol {
 
     fun encodeLeave(): String = """{"type":"LEAVE"}"""
 
+    fun encodeDisband(): String = """{"type":"DISBAND"}"""
+
+    fun encodeQuickMessage(messageId: String): String {
+        return JSONObject()
+            .put("type", "QUICK_MESSAGE")
+            .put("messageId", messageId)
+            .toString()
+    }
+
     fun encodeAction(seat: Int, action: RemoteAction): String {
         val actionObj = JSONObject()
         when (action) {
@@ -119,7 +141,13 @@ object GameProtocol {
                     List(arr.length()) { arr.getString(it) }
                 },
                 aiCount = obj.optInt("aiCount", 2).coerceIn(0, 2),
-                requiredHumans = obj.optInt("requiredHumans", 1).coerceIn(1, 3)
+                requiredHumans = obj.optInt("requiredHumans", 1).coerceIn(1, 3),
+                difficulty = runCatching {
+                    AiDifficulty.valueOf(obj.optString("difficulty", AiDifficulty.MEDIUM.name))
+                }.getOrDefault(AiDifficulty.MEDIUM),
+                actionTimeoutSeconds = obj.optInt("actionTimeoutSeconds", 20)
+                    .takeIf { it in setOf(15, 20, 30, 45) }
+                    ?: 20
             )
             "STATE" -> NetMessage.State(
                 GameCodec.decodeState(obj.getJSONObject("state").toString())
@@ -134,6 +162,14 @@ object GameProtocol {
                     ?: obj.optString("code").ifBlank { null }
                 NetMessage.Error(ServerError(code = code, message = message))
             }
+            "ROOM_DISBANDED" -> NetMessage.RoomDisbanded(
+                reason = obj.optString("reason", "房主已解散房间")
+            )
+            "QUICK_MESSAGE" -> NetMessage.QuickMessage(
+                seat = obj.getInt("seat"),
+                messageId = obj.getString("messageId"),
+                at = obj.optLong("at", System.currentTimeMillis())
+            )
             "PONG" -> NetMessage.Pong
             else -> throw IllegalArgumentException("无法识别的服务器消息")
         }

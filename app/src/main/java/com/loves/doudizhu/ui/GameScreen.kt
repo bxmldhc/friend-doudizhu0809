@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
@@ -81,10 +83,13 @@ fun GameScreen(
     onRestart: () -> Unit,
     onRetry: () -> Unit,
     onExit: () -> Unit,
+    onDisband: () -> Unit,
+    onQuickMessage: (String) -> Unit,
     onVoiceEnabledChange: (Boolean) -> Unit,
     onPlayerProfile: (Int) -> Unit,
     onDismissPlayerProfile: () -> Unit,
-    playerProfile: PlayerProfileUiState
+    playerProfile: PlayerProfileUiState,
+    quickMessage: QuickMessageUi?
 ) {
     val game = state.state
     val mySeat = game.seats.getOrNull(state.mySeat)
@@ -101,6 +106,8 @@ fun GameScreen(
     var showRoundScore by remember(game.gameNumber, game.phase) {
         mutableStateOf(game.phase == Phase.FINISHED)
     }
+    var showQuickMessages by remember { mutableStateOf(false) }
+    var showDisbandConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(game.gameNumber, game.turnIndex, game.phase) {
         if (game.phase != Phase.FINISHED) selected = emptySet()
@@ -119,6 +126,9 @@ fun GameScreen(
                 game = game,
                 onRetry = onRetry,
                 onScoreboard = { showScoreboard = !showScoreboard },
+                onQuickMessages = { showQuickMessages = !showQuickMessages },
+                canDisband = state.isHost && game.phase == Phase.FINISHED,
+                onDisband = { showDisbandConfirm = true },
                 onVoiceEnabledChange = onVoiceEnabledChange,
                 onExit = { showExitConfirm = true }
             )
@@ -176,7 +186,8 @@ fun GameScreen(
                 canRestart = state.isHost && requiredPlayersPresent && game.readySeats.all { it },
                 isReady = game.readySeats.getOrNull(state.mySeat) == true,
                 onReady = onReady,
-                onRestart = onRestart
+                onRestart = onRestart,
+                onDisband = { showDisbandConfirm = true }
             )
         }
         if (state.connection == AppConnectionState.RECONNECTING) {
@@ -204,6 +215,47 @@ fun GameScreen(
                     }.sortedByDescending { it.score }
                 },
                 onDismiss = { showScoreboard = false }
+            )
+        }
+        if (showQuickMessages) {
+            QuickMessageMenu(
+                onSelect = {
+                    showQuickMessages = false
+                    onQuickMessage(it)
+                },
+                onDismiss = { showQuickMessages = false }
+            )
+        }
+        quickMessage?.let {
+            QuickMessageBubble(
+                message = quickMessageLabel(it.messageId),
+                seat = it.seat,
+                mySeat = state.mySeat
+            )
+        }
+        if (showDisbandConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDisbandConfirm = false },
+                title = { Text("解散这个房间？") },
+                text = { Text("房间、场内分数和本场记录将被清除，其他玩家会返回首页。") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showDisbandConfirm = false
+                            onDisband()
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = Coral
+                        )
+                    ) {
+                        Text("确认解散")
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { showDisbandConfirm = false }) {
+                        Text("取消")
+                    }
+                }
             )
         }
         if (showExitConfirm) {
@@ -252,6 +304,9 @@ private fun GameTopBar(
     game: EngineState,
     onRetry: () -> Unit,
     onScoreboard: () -> Unit,
+    onQuickMessages: () -> Unit,
+    canDisband: Boolean,
+    onDisband: () -> Unit,
     onVoiceEnabledChange: (Boolean) -> Unit,
     onExit: () -> Unit
 ) {
@@ -297,6 +352,12 @@ private fun GameTopBar(
                 fontSize = if (compact) 12.sp else 13.sp
             )
             IconButton(
+                onClick = onQuickMessages,
+                modifier = Modifier.size(if (compact) 40.dp else 44.dp)
+            ) {
+                Icon(Icons.Default.ChatBubble, "快捷消息", tint = Color.White)
+            }
+            IconButton(
                 onClick = { onVoiceEnabledChange(!state.voiceEnabled) },
                 modifier = Modifier.size(if (compact) 40.dp else 44.dp)
             ) {
@@ -312,6 +373,11 @@ private fun GameTopBar(
                 modifier = Modifier.size(if (compact) 40.dp else 44.dp)
             ) {
                 Icon(Icons.Default.Leaderboard, "查看场内排行榜", tint = Color.White)
+            }
+            if (canDisband && !compact) {
+                IconButton(onClick = onDisband, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Default.DeleteForever, "解散房间", tint = Color(0xFFF28B78))
+                }
             }
             if (!compact || state.connection != AppConnectionState.ONLINE) {
                 Text(
@@ -332,6 +398,85 @@ private fun GameTopBar(
                 ) {
                     Icon(Icons.Default.Refresh, "重新连接", tint = Color.White)
                 }
+            }
+        }
+    }
+}
+
+private val quickMessages = listOf(
+    "WAIT_A_MOMENT" to "稍等一下",
+    "READY_TO_START" to "可以开始了",
+    "PLAY_AGAIN" to "再来一局",
+    "NETWORK_SLOW" to "网络有点卡",
+    "BE_RIGHT_BACK" to "我马上回来"
+)
+
+private fun quickMessageLabel(id: String): String {
+    return quickMessages.firstOrNull { it.first == id }?.second ?: "快捷消息"
+}
+
+@Composable
+private fun QuickMessageMenu(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize().clickable(onClick = onDismiss),
+        contentAlignment = Alignment.TopEnd
+    ) {
+        Surface(
+            modifier = Modifier
+                .padding(top = 58.dp, end = 92.dp)
+                .width(180.dp)
+                .clickable(onClick = {}),
+            color = Color(0xF212333B),
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = .12f))
+        ) {
+            Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                quickMessages.forEach { (id, label) ->
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(id) }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickMessageBubble(message: String, seat: Int, mySeat: Int) {
+    val alignment = when (seat) {
+        mySeat -> Alignment.BottomStart
+        nextSeat(mySeat) -> Alignment.TopEnd
+        else -> Alignment.TopStart
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(
+                start = if (alignment == Alignment.TopStart) 150.dp else 16.dp,
+                end = if (alignment == Alignment.TopEnd) 150.dp else 16.dp,
+                top = 72.dp,
+                bottom = 142.dp
+            ),
+        color = Color.Transparent
+    ) {
+        Box(contentAlignment = alignment) {
+            Surface(
+                color = Color(0xF2F2D675),
+                contentColor = PageBg,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text(
+                    message,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
@@ -812,85 +957,94 @@ private fun Controls(
     canRestart: Boolean,
     isReady: Boolean,
     onReady: (Boolean) -> Unit,
-    onRestart: () -> Unit
+    onRestart: () -> Unit,
+    onDisband: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        when {
-            game.phase == Phase.FINISHED -> {
-                Button(
-                    onClick = { onReady(!isReady) },
-                    modifier = Modifier.weight(1f).height(52.dp),
-                    enabled = game.seats.getOrNull(state.mySeat)?.isHuman == true,
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
-                ) {
-                    Text(if (isReady) "取消准备" else "准备", fontWeight = FontWeight.Bold)
-                }
-                if (isHost) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        val compact = maxWidth < 820.dp
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            when {
+                game.phase == Phase.FINISHED -> {
                     Button(
-                        onClick = onRestart,
+                        onClick = { onReady(!isReady) },
                         modifier = Modifier.weight(1f).height(52.dp),
-                        enabled = canRestart,
+                        enabled = game.seats.getOrNull(state.mySeat)?.isHuman == true,
                         colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
                     ) {
-                        Text(if (canRestart) "开始下一局" else "等待全员准备", fontWeight = FontWeight.Bold)
+                        Text(if (isReady) "取消准备" else "准备", fontWeight = FontWeight.Bold)
                     }
-                } else {
-                    Box(
-                        modifier = Modifier.weight(1f).height(52.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (isReady) "已准备，等待房主开始" else "准备后等待房主开始",
-                            color = Muted,
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center
-                        )
+                    if (isHost) {
+                        Button(
+                            onClick = onRestart,
+                            modifier = Modifier.weight(1f).height(52.dp),
+                            enabled = canRestart,
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                        ) {
+                            Text(if (canRestart) "开始下一局" else "等待全员准备", fontWeight = FontWeight.Bold)
+                        }
+                        if (compact) {
+                            IconButton(onClick = onDisband, modifier = Modifier.size(52.dp)) {
+                                Icon(Icons.Default.DeleteForever, "解散房间", tint = Color(0xFFF28B78))
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier.weight(1f).height(52.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                if (isReady) "已准备，等待房主开始" else "准备后等待房主开始",
+                                color = Muted,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
-            }
-            canBid -> {
-                ActionButton(
-                    resource = if (game.bidCandidateIndex == null) R.drawable.actions_action_call else R.drawable.actions_action_rob,
-                    label = if (game.bidCandidateIndex == null) "叫地主" else "抢地主",
-                    onClick = { onCall(true) },
-                    modifier = Modifier.weight(1f)
-                )
-                ActionButton(
-                    resource = R.drawable.actions_action_pass,
-                    label = if (game.bidCandidateIndex == null) "不叫" else "不抢",
-                    onClick = { onCall(false) },
-                    modifier = Modifier.weight(1f),
-                    outlined = true
-                )
-            }
-            canPlay -> {
-                ActionButton(
-                    resource = R.drawable.actions_action_play,
-                    label = "出牌",
-                    onClick = onPlay,
-                    enabled = selected.isNotEmpty(),
-                    modifier = Modifier.weight(1f)
-                )
-                ActionButton(
-                    resource = R.drawable.actions_action_pass,
-                    label = "不出",
-                    onClick = onPass,
-                    enabled = game.canPass(),
-                    modifier = Modifier.weight(1f),
-                    outlined = true
-                )
-            }
-            game.phase == Phase.PLAYING -> {
-                Text(
-                    text = if (state.connection == AppConnectionState.RECONNECTING) "连接恢复后继续" else "${game.currentSeat.name} 正在操作",
-                    color = Muted,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    textAlign = TextAlign.Center,
-                    fontSize = 13.sp
-                )
+                canBid -> {
+                    ActionButton(
+                        resource = if (game.bidCandidateIndex == null) R.drawable.actions_action_call else R.drawable.actions_action_rob,
+                        label = if (game.bidCandidateIndex == null) "叫地主" else "抢地主",
+                        onClick = { onCall(true) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    ActionButton(
+                        resource = R.drawable.actions_action_pass,
+                        label = if (game.bidCandidateIndex == null) "不叫" else "不抢",
+                        onClick = { onCall(false) },
+                        modifier = Modifier.weight(1f),
+                        outlined = true
+                    )
+                }
+                canPlay -> {
+                    ActionButton(
+                        resource = R.drawable.actions_action_play,
+                        label = "出牌",
+                        onClick = onPlay,
+                        enabled = selected.isNotEmpty(),
+                        modifier = Modifier.weight(1f)
+                    )
+                    ActionButton(
+                        resource = R.drawable.actions_action_pass,
+                        label = "不出",
+                        onClick = onPass,
+                        enabled = game.canPass(),
+                        modifier = Modifier.weight(1f),
+                        outlined = true
+                    )
+                }
+                game.phase == Phase.PLAYING -> {
+                    Text(
+                        text = if (state.connection == AppConnectionState.RECONNECTING) "连接恢复后继续" else "${game.currentSeat.name} 正在操作",
+                        color = Muted,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp
+                    )
+                }
             }
         }
     }

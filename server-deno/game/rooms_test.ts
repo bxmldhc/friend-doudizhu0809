@@ -3,6 +3,8 @@ import { RoomManager } from "./rooms.ts";
 import { kv } from "./db.ts";
 import { getStats } from "./store.ts";
 import {
+  createAccountForAdmin,
+  loginAccount,
   registerAccount,
   resetAccountPassword,
 } from "./auth.ts";
@@ -774,9 +776,63 @@ Deno.test("密码重置后已连接账号不能继续操作", async () => {
       }),
     );
     await resetAccountPassword(account.account.accountId, "changed12");
-    await manager.handleMessage(socket(host), JSON.stringify({ type: "START" }));
+    await manager.handleMessage(
+      socket(host),
+      JSON.stringify({ type: "START" }),
+    );
     assertErrorCode(host, "AUTH_REQUIRED");
   } finally {
+    if (previousIterations === undefined) {
+      Deno.env.delete("AUTH_PBKDF2_ITERATIONS");
+    } else {
+      Deno.env.set("AUTH_PBKDF2_ITERATIONS", previousIterations);
+    }
+  }
+});
+
+Deno.test("临时密码账号不能创建、加入或恢复房间", async () => {
+  const previousIterations = Deno.env.get("AUTH_PBKDF2_ITERATIONS");
+  Deno.env.set("AUTH_PBKDF2_ITERATIONS", "10000");
+  const nickname = `临时${crypto.randomUUID().slice(0, 6)}`;
+  let accountId = "";
+  let authToken = "";
+
+  try {
+    const account = await createAccountForAdmin(nickname, "secret12");
+    accountId = account.accountId;
+    const login = await loginAccount(nickname, "secret12");
+    authToken = login.token;
+    const manager = new RoomManager({ persistStats: false });
+
+    for (
+      const message of [
+        {
+          type: "CREATE",
+          authToken,
+          difficulty: "MEDIUM",
+          aiCount: 2,
+        },
+        { type: "JOIN", room: "123456", authToken },
+        {
+          type: "RECONNECT",
+          room: "123456",
+          token: "invalid-resume-token",
+          authToken,
+        },
+      ]
+    ) {
+      const ws = new FakeSocket();
+      await manager.handleMessage(socket(ws), JSON.stringify(message));
+      assertErrorCode(ws, "PASSWORD_CHANGE_REQUIRED");
+    }
+  } finally {
+    if (authToken) await kv.delete(["sessions", authToken]);
+    if (accountId) {
+      await kv.delete(["accounts", accountId]);
+      await kv.delete(["players", accountId]);
+      await kv.delete(["recentMatches", accountId]);
+    }
+    await kv.delete(["accountByNickname", nickname.toLocaleLowerCase()]);
     if (previousIterations === undefined) {
       Deno.env.delete("AUTH_PBKDF2_ITERATIONS");
     } else {
@@ -800,3 +856,89 @@ function assertErrorCode(ws: FakeSocket, expectedCode: string) {
     );
   }
 }
+
+Deno.test("room keeps selected difficulty and action timeout", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  const anotherFriend = new FakeSocket();
+  manager.create(socket(host), "host", "HARD", 0, "", false, 45);
+
+  const room = latestRoom(host);
+  if (room.difficulty !== "HARD" || room.actionTimeoutSeconds !== 45) {
+    throw new Error("ROOM did not include selected rules");
+  }
+
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "friend");
+  manager.join(socket(anotherFriend), code, "another");
+  manager.start(socket(host));
+  const state = latestState(host).state as Record<string, unknown>;
+  if (typeof state.actionDeadlineAt !== "number") {
+    throw new Error("human turn did not include an action deadline");
+  }
+  const remaining = state.actionDeadlineAt - Date.now();
+  if (remaining < 43_000 || remaining > 46_000) {
+    throw new Error(`expected a 45 second deadline, got ${remaining}ms`);
+  }
+});
+
+Deno.test("only host can disband an idle room", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(socket(host), "host", "MEDIUM", 1);
+  const code = roomCode(host);
+  manager.join(socket(friend), code, "friend");
+
+  manager.disband(socket(friend));
+  assertErrorCode(friend, "NOT_HOST");
+
+  manager.disband(socket(host));
+  if (
+    lastMessage(host).type !== "ROOM_DISBANDED" ||
+    lastMessage(friend).type !== "ROOM_DISBANDED"
+  ) {
+    throw new Error("disband was not broadcast to every connected player");
+  }
+
+  const newcomer = new FakeSocket();
+  const result = manager.join(socket(newcomer), code, "newcomer");
+  if (result.ok || result.code !== "ROOM_NOT_FOUND") {
+    throw new Error("disbanded room still exists");
+  }
+});
+
+Deno.test("host cannot disband during an active round", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  manager.create(socket(host), "host", "MEDIUM", 2);
+  manager.start(socket(host));
+
+  manager.disband(socket(host));
+  assertErrorCode(host, "GAME_IN_PROGRESS");
+});
+
+Deno.test("quick messages are allowlisted and rate limited", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const friend = new FakeSocket();
+  manager.create(socket(host), "host", "MEDIUM", 1);
+  manager.join(socket(friend), roomCode(host), "friend");
+
+  manager.sendQuickMessage(socket(host), "WAIT_A_MOMENT");
+  const first = lastMessage(friend);
+  if (
+    first.type !== "QUICK_MESSAGE" ||
+    first.messageId !== "WAIT_A_MOMENT" ||
+    first.seat !== 0
+  ) {
+    throw new Error("quick message payload is incomplete");
+  }
+
+  manager.sendQuickMessage(socket(host), "READY_TO_START");
+  assertErrorCode(host, "MESSAGE_RATE_LIMITED");
+
+  manager.sendQuickMessage(socket(friend), "CUSTOM_TEXT");
+  assertErrorCode(friend, "INVALID_QUICK_MESSAGE");
+});

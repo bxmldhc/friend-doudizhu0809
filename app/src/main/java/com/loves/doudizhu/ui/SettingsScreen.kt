@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loves.doudizhu.R
+import com.loves.doudizhu.model.AiDifficulty
 
 private val PageBg = Color(0xFF091F27)
 private val SurfaceBg = Color(0xFF12333B)
@@ -207,53 +210,82 @@ fun HomeScreen(
                 )
             }
         }
-        Column(
-            modifier = Modifier.width(52.dp).fillMaxSize(),
+        LazyColumn(
+            modifier = Modifier
+                .width(60.dp)
+                .fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Bottom
+            verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom)
         ) {
             if (state.isAdmin) {
-                IconButton(onClick = onAdmin, modifier = Modifier.size(48.dp)) {
+                item {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        IconButton(onClick = onAdmin, modifier = Modifier.size(48.dp)) {
+                            Icon(
+                                Icons.Default.AdminPanelSettings,
+                                contentDescription = "超级管理入口",
+                                tint = Wax
+                            )
+                        }
+                        Text("管理", color = Muted, fontSize = 11.sp)
+                    }
+                }
+            }
+            item {
+                HomeNavigationItem(
+                    label = "战绩",
+                    onClick = onHistory
+                ) {
+                    Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
+                }
+            }
+            item {
+                HomeNavigationItem(
+                    label = "更新",
+                    onClick = onCheckUpdate
+                ) {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
+                }
+            }
+            item {
+                HomeNavigationItem(
+                    label = if (state.voiceEnabled) "语音开" else "语音关",
+                    onClick = { onVoiceEnabledChange(!state.voiceEnabled) }
+                ) {
                     Icon(
-                        Icons.Default.AdminPanelSettings,
-                        contentDescription = "超级管理入口",
-                        tint = Wax
+                        imageVector = if (state.voiceEnabled) {
+                            Icons.AutoMirrored.Filled.VolumeUp
+                        } else {
+                            Icons.AutoMirrored.Filled.VolumeOff
+                        },
+                        contentDescription = if (state.voiceEnabled) "关闭语音" else "开启语音",
+                        tint = if (state.voiceEnabled) Wax else Muted
                     )
                 }
-                Text("管理", color = Muted, fontSize = 11.sp)
-                Spacer(Modifier.height(12.dp))
             }
-            IconButton(onClick = onHistory, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
+            item {
+                HomeNavigationItem(
+                    label = "账号",
+                    onClick = onAccount
+                ) {
+                    Icon(Icons.Default.ManageAccounts, contentDescription = "账号管理", tint = Color.White)
+                }
             }
-            Text("战绩", color = Muted, fontSize = 11.sp)
-            Spacer(Modifier.height(12.dp))
-            IconButton(onClick = onCheckUpdate, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
-            }
-            Text("更新", color = Muted, fontSize = 11.sp)
-            Spacer(Modifier.height(12.dp))
-            IconButton(
-                onClick = { onVoiceEnabledChange(!state.voiceEnabled) },
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = if (state.voiceEnabled) {
-                        Icons.AutoMirrored.Filled.VolumeUp
-                    } else {
-                        Icons.AutoMirrored.Filled.VolumeOff
-                    },
-                    contentDescription = if (state.voiceEnabled) "关闭语音" else "开启语音",
-                    tint = if (state.voiceEnabled) Wax else Muted
-                )
-            }
-            Text(if (state.voiceEnabled) "语音开" else "语音关", color = Muted, fontSize = 11.sp)
-            Spacer(Modifier.height(12.dp))
-            IconButton(onClick = onAccount, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.ManageAccounts, contentDescription = "账号管理", tint = Color.White)
-            }
-            Text("账号", color = Muted, fontSize = 11.sp)
         }
+    }
+}
+
+@Composable
+private fun HomeNavigationItem(
+    label: String,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+            icon()
+        }
+        Text(label, color = Muted, fontSize = 11.sp, textAlign = TextAlign.Center)
     }
 }
 
@@ -434,8 +466,15 @@ fun CreateRoomScreen(
     nickname: String,
     initialServerUrl: String,
     initialAiCount: Int,
+    initialDifficulty: AiDifficulty,
+    initialActionTimeoutSeconds: Int,
     onBack: () -> Unit,
-    onCreate: (serverUrl: String, aiCount: Int) -> Unit
+    onCreate: (
+        serverUrl: String,
+        aiCount: Int,
+        difficulty: AiDifficulty,
+        actionTimeoutSeconds: Int
+    ) -> Unit
 ) {
     RoomForm(
         title = "创建房间",
@@ -443,9 +482,13 @@ fun CreateRoomScreen(
         nickname = nickname,
         initialServerUrl = initialServerUrl,
         initialAiCount = initialAiCount,
+        initialDifficulty = initialDifficulty,
+        initialActionTimeoutSeconds = initialActionTimeoutSeconds,
         roomCode = null,
         onBack = onBack,
-        onSubmit = { url, _, aiCount -> onCreate(url, aiCount) }
+        onSubmit = { url, _, aiCount, difficulty, timeout ->
+            onCreate(url, aiCount, difficulty, timeout)
+        }
     )
 }
 
@@ -463,9 +506,11 @@ fun JoinRoomScreen(
         nickname = nickname,
         initialServerUrl = initialServerUrl,
         initialAiCount = 2,
+        initialDifficulty = AiDifficulty.MEDIUM,
+        initialActionTimeoutSeconds = 20,
         roomCode = initialRoom,
         onBack = onBack,
-        onSubmit = { url, room, _ -> onJoin(room, url) }
+        onSubmit = { url, room, _, _, _ -> onJoin(room, url) }
     )
 }
 
@@ -476,17 +521,35 @@ private fun RoomForm(
     nickname: String,
     initialServerUrl: String,
     initialAiCount: Int,
+    initialDifficulty: AiDifficulty,
+    initialActionTimeoutSeconds: Int,
     roomCode: String?,
     onBack: () -> Unit,
-    onSubmit: (url: String, room: String, aiCount: Int) -> Unit
+    onSubmit: (
+        url: String,
+        room: String,
+        aiCount: Int,
+        difficulty: AiDifficulty,
+        actionTimeoutSeconds: Int
+    ) -> Unit
 ) {
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
     var room by remember(roomCode) { mutableStateOf(roomCode.orEmpty()) }
     var aiCount by remember { mutableStateOf(initialAiCount.coerceIn(0, 2)) }
+    var difficulty by remember { mutableStateOf(initialDifficulty) }
+    var actionTimeoutSeconds by remember {
+        mutableStateOf(
+            initialActionTimeoutSeconds.takeIf { it in setOf(15, 20, 30, 45) } ?: 20
+        )
+    }
     var error by remember { mutableStateOf<String?>(null) }
 
     Column(
-        modifier = Modifier.fillMaxSize().background(PageBg).padding(24.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(PageBg)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         verticalArrangement = Arrangement.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -578,6 +641,67 @@ private fun RoomForm(
                             color = Muted,
                             fontSize = 12.sp
                         )
+                        if (aiCount > 0) {
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "AI 难度",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(
+                                    AiDifficulty.EASY to "简单",
+                                    AiDifficulty.MEDIUM to "普通",
+                                    AiDifficulty.HARD to "困难"
+                                ).forEach { (option, label) ->
+                                    val selected = difficulty == option
+                                    OutlinedButton(
+                                        onClick = { difficulty = option },
+                                        modifier = Modifier.weight(1f).height(44.dp),
+                                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                            containerColor = if (selected) Wax else Color.Transparent,
+                                            contentColor = if (selected) PageBg else Muted
+                                        ),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text(label, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "操作限时",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            listOf(15, 20, 30, 45).forEach { option ->
+                                val selected = actionTimeoutSeconds == option
+                                OutlinedButton(
+                                    onClick = { actionTimeoutSeconds = option },
+                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    contentPadding = PaddingValues(horizontal = 2.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (selected) Coral else Color.Transparent,
+                                        contentColor = if (selected) Color.White else Muted
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("$option 秒", fontSize = 11.sp)
+                                }
+                            }
+                        }
                     }
                     if (error != null) {
                         Text(error.orEmpty(), color = Color(0xFFF28B78), fontSize = 13.sp)
@@ -589,7 +713,13 @@ private fun RoomForm(
                                 error = "请输入六位数字房号"
                             } else {
                                 error = null
-                                onSubmit(serverUrl, room, aiCount)
+                                onSubmit(
+                                    serverUrl,
+                                    room,
+                                    aiCount,
+                                    difficulty,
+                                    actionTimeoutSeconds
+                                )
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(52.dp),

@@ -18,7 +18,8 @@ data class AuthSession(
     val accountId: String,
     val nickname: String,
     val role: AccountRole = AccountRole.USER,
-    val isAdmin: Boolean = role == AccountRole.ADMIN
+    val isAdmin: Boolean = role == AccountRole.ADMIN,
+    val mustChangePassword: Boolean = false
 )
 
 enum class AccountRole {
@@ -46,6 +47,7 @@ data class AdminAccount(
     val role: AccountRole,
     val isAdmin: Boolean,
     val disabled: Boolean = false,
+    val mustChangePassword: Boolean = false,
     val totalScore: Int = 0,
     val games: Int = 0,
     val wins: Int = 0
@@ -318,6 +320,26 @@ class AuthApi(
         )
     }
 
+    suspend fun createAdminAccount(
+        baseUrl: String,
+        authToken: String,
+        nickname: String,
+        temporaryPassword: String
+    ): ApiResult<AdminAccount> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/admin/accounts",
+                method = "POST",
+                body = JSONObject()
+                    .put("nickname", nickname)
+                    .put("temporaryPassword", temporaryPassword),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseAdminAccountResult
+        )
+    }
+
     suspend fun adminRooms(
         baseUrl: String,
         authToken: String
@@ -524,10 +546,21 @@ internal object AuthResponseParser {
             AccountRole.from(declaredRole)
         }
         val isAdmin = declaredAdmin == true || role == AccountRole.ADMIN
+        val mustChangePassword = firstBoolean(account, "mustChangePassword")
+            ?: firstBoolean(data, "mustChangePassword")
+            ?: firstBoolean(root, "mustChangePassword")
+            ?: false
         require(token.isNotBlank()) { "账号服务器未返回登录令牌" }
         require(accountId.isNotBlank()) { "账号服务器未返回账号 ID" }
         require(nickname.isNotBlank()) { "账号服务器未返回昵称" }
-        return AuthSession(token, accountId, nickname, role, isAdmin)
+        return AuthSession(
+            authToken = token,
+            accountId = accountId,
+            nickname = nickname,
+            role = role,
+            isAdmin = isAdmin,
+            mustChangePassword = mustChangePassword
+        )
     }
 
     fun parseStats(root: JSONObject): AccountStats {
@@ -786,6 +819,7 @@ internal object AuthResponseParser {
             role = role,
             isAdmin = declaredAdmin == true || role == AccountRole.ADMIN,
             disabled = firstBoolean(item, "disabled") == true,
+            mustChangePassword = firstBoolean(item, "mustChangePassword") == true,
             totalScore = firstInt(item, "totalScore", "score", "points"),
             games = firstInt(item, "games", "gameCount", "totalGames"),
             wins = firstInt(item, "wins", "winCount", "totalWins")

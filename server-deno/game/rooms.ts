@@ -30,6 +30,8 @@ interface Room {
   engine: DoudizhuEngine | null;
   difficulty: Difficulty;
   aiCount: number;
+  actionTimeoutMs: number;
+  quickMessageAt: number[];
   aiRunning: boolean;
   actionDeadlineAt: number | null;
   turnTimer: ReturnType<typeof setTimeout> | null;
@@ -63,6 +65,7 @@ export interface AdminRoomSnapshot {
   gameNumber: number;
   difficulty: Difficulty;
   aiCount: number;
+  actionTimeoutSeconds: number;
   connectedHumanCount: number;
   occupiedHumanCount: number;
   hostSeat: number;
@@ -87,6 +90,16 @@ interface RoomOperationResult {
 const AI_NAMES = ["小智", "阿强", "老K"];
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 export const DEFAULT_STALE_ROOM_GRACE_MS = 60_000;
+const DEFAULT_ACTION_TIMEOUT_SECONDS = 20;
+const ALLOWED_ACTION_TIMEOUT_SECONDS = new Set([15, 20, 30, 45]);
+const QUICK_MESSAGE_COOLDOWN_MS = 2_000;
+const QUICK_MESSAGE_IDS = new Set([
+  "WAIT_A_MOMENT",
+  "READY_TO_START",
+  "PLAY_AGAIN",
+  "NETWORK_SLOW",
+  "BE_RIGHT_BACK",
+]);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -124,6 +137,7 @@ export class RoomManager {
     requestedAiCount: number,
     requestedPlayerId = "",
     isAuthenticated = false,
+    requestedActionTimeoutSeconds = DEFAULT_ACTION_TIMEOUT_SECONDS,
   ): string {
     const aiCount = Math.max(
       0,
@@ -153,6 +167,11 @@ export class RoomManager {
       names[seat] = ai.name;
     }
     const createdAt = Date.now();
+    const actionTimeoutSeconds = ALLOWED_ACTION_TIMEOUT_SECONDS.has(
+        requestedActionTimeoutSeconds,
+      )
+      ? requestedActionTimeoutSeconds
+      : DEFAULT_ACTION_TIMEOUT_SECONDS;
     const room: Room = {
       code,
       matchId: crypto.randomUUID(),
@@ -171,6 +190,8 @@ export class RoomManager {
       engine: null,
       difficulty,
       aiCount,
+      actionTimeoutMs: actionTimeoutSeconds * 1_000,
+      quickMessageAt: [0, 0, 0],
       aiRunning: false,
       actionDeadlineAt: null,
       turnTimer: null,
@@ -397,6 +418,72 @@ export class RoomManager {
     this.broadcastState(room);
   }
 
+  disband(ws: WebSocket) {
+    const room = this.getRoomBySocket(ws);
+    if (!room) {
+      sendError(ws, "INVALID_ACTION", "当前连接不在房间中");
+      return;
+    }
+    if (room.sockets[room.hostSeat] !== ws) {
+      sendError(ws, "NOT_HOST", "只有房主可以解散房间");
+      return;
+    }
+    if (room.engine && room.engine.state.phase !== "FINISHED") {
+      sendError(ws, "GAME_IN_PROGRESS", "牌局进行中不能解散房间");
+      return;
+    }
+    const sockets = room.sockets.filter(
+      (socket): socket is WebSocket => socket !== null,
+    );
+    for (const socket of sockets) {
+      send(socket, {
+        type: "ROOM_DISBANDED",
+        room: room.code,
+        reason: "房主已解散房间",
+      });
+    }
+    this.destroyRoom(room);
+    for (const socket of sockets) {
+      try {
+        socket.close(4000, "room disbanded");
+      } catch {
+        // Test doubles may not implement a full WebSocket close.
+      }
+    }
+  }
+
+  sendQuickMessage(ws: WebSocket, requestedMessageId: string) {
+    const room = this.getRoomBySocket(ws);
+    if (!room) {
+      sendError(ws, "INVALID_ACTION", "当前连接不在房间中");
+      return;
+    }
+    const seat = room.sockets.findIndex((socket) => socket === ws);
+    if (seat < 0) return;
+    const messageId = requestedMessageId.trim().toUpperCase();
+    if (!QUICK_MESSAGE_IDS.has(messageId)) {
+      sendError(ws, "INVALID_QUICK_MESSAGE", "不支持这条快捷消息");
+      return;
+    }
+    const now = Date.now();
+    if (now - room.quickMessageAt[seat] < QUICK_MESSAGE_COOLDOWN_MS) {
+      sendError(ws, "MESSAGE_RATE_LIMITED", "发送太快，请稍后再试");
+      return;
+    }
+    room.quickMessageAt[seat] = now;
+    this.touchRoom(room);
+    for (const socket of room.sockets) {
+      if (socket) {
+        send(socket, {
+          type: "QUICK_MESSAGE",
+          seat,
+          messageId,
+          at: now,
+        });
+      }
+    }
+  }
+
   action(ws: WebSocket, seat: number, action: RemoteAction) {
     const room = this.getRoomBySocket(ws);
     if (!room || !room.engine) {
@@ -521,6 +608,10 @@ export class RoomManager {
           });
           break;
         }
+        if (identity.mustChangePassword) {
+          sendError(ws, "PASSWORD_CHANGE_REQUIRED", "请先修改临时密码");
+          break;
+        }
         this.create(
           ws,
           identity.name,
@@ -528,6 +619,9 @@ export class RoomManager {
           Number(msg.aiCount ?? 2),
           identity.playerId,
           identity.isAuthenticated,
+          Number(
+            msg.actionTimeoutSeconds ?? DEFAULT_ACTION_TIMEOUT_SECONDS,
+          ),
         );
         this.bindSocketIdentity(
           ws,
@@ -545,6 +639,10 @@ export class RoomManager {
             code: "AUTH_REQUIRED",
             message: "登录已失效，请重新登录",
           });
+          break;
+        }
+        if (identity.mustChangePassword) {
+          sendError(ws, "PASSWORD_CHANGE_REQUIRED", "请先修改临时密码");
           break;
         }
         const result = this.join(
@@ -576,6 +674,10 @@ export class RoomManager {
           sendError(ws, "AUTH_REQUIRED", "登录已失效，请重新登录");
           break;
         }
+        if (identity.mustChangePassword) {
+          sendError(ws, "PASSWORD_CHANGE_REQUIRED", "请先修改临时密码");
+          break;
+        }
         const result = this.reconnect(
           ws,
           String(msg.room),
@@ -605,6 +707,14 @@ export class RoomManager {
         if (!await this.requireSocketIdentity(ws)) break;
         this.setReady(ws, Boolean(msg.ready));
         break;
+      case "DISBAND":
+        if (!await this.requireSocketIdentity(ws)) break;
+        this.disband(ws);
+        break;
+      case "QUICK_MESSAGE":
+        if (!await this.requireSocketIdentity(ws)) break;
+        this.sendQuickMessage(ws, String(msg.messageId ?? ""));
+        break;
       case "LEAVE":
         if (!await this.requireSocketIdentity(ws)) break;
         this.leave(ws);
@@ -626,6 +736,7 @@ export class RoomManager {
       playerId: string;
       name: string;
       isAuthenticated: boolean;
+      mustChangePassword: boolean;
     } | null
   > {
     const authToken = String(msg.authToken ?? "").trim();
@@ -636,6 +747,7 @@ export class RoomManager {
           playerId: account.accountId,
           name: account.nickname,
           isAuthenticated: true,
+          mustChangePassword: account.mustChangePassword,
         }
         : null;
     }
@@ -644,17 +756,24 @@ export class RoomManager {
       playerId: String(msg.playerId ?? ""),
       name: String(msg.name ?? "玩家"),
       isAuthenticated: false,
+      mustChangePassword: false,
     };
   }
 
   private async resolveAuthenticatedMessageIdentity(
     msg: Record<string, unknown>,
-  ): Promise<{ playerId: string; name: string } | null> {
+  ): Promise<
+    { playerId: string; name: string; mustChangePassword: boolean } | null
+  > {
     const authToken = String(msg.authToken ?? "").trim();
     if (!authToken) return null;
     const account = await resolveSession(authToken);
     return account
-      ? { playerId: account.accountId, name: account.nickname }
+      ? {
+        playerId: account.accountId,
+        name: account.nickname,
+        mustChangePassword: account.mustChangePassword,
+      }
       : null;
   }
 
@@ -713,6 +832,8 @@ export class RoomManager {
       resumeToken: room.resumeTokens[seat],
       aiCount: room.aiCount,
       requiredHumans: 3 - room.aiCount,
+      difficulty: room.difficulty,
+      actionTimeoutSeconds: room.actionTimeoutMs / 1_000,
     });
   }
 
@@ -789,7 +910,7 @@ export class RoomManager {
     if (!engine) return;
     if (engine.state.phase !== "FINISHED" && engine.isHumanTurn()) {
       const version = room.turnVersion;
-      const timeoutMs = this.options.actionTimeoutMs ?? 20_000;
+      const timeoutMs = this.options.actionTimeoutMs ?? room.actionTimeoutMs;
       room.actionDeadlineAt = Date.now() + timeoutMs;
       const timer = setTimeout(
         () => this.handleTurnTimeout(room, version),
@@ -1047,6 +1168,7 @@ export class RoomManager {
       gameNumber: room.engine?.state.gameNumber ?? 0,
       difficulty: room.difficulty,
       aiCount: room.aiCount,
+      actionTimeoutSeconds: room.actionTimeoutMs / 1_000,
       connectedHumanCount: room.sockets
         .slice(0, requiredHumans)
         .filter((socket) => socket !== null).length,

@@ -30,9 +30,13 @@ class OnlineClient(
         resumeToken: String?,
         players: List<String>,
         aiCount: Int,
-        requiredHumans: Int
+        requiredHumans: Int,
+        difficulty: AiDifficulty,
+        actionTimeoutSeconds: Int
     ) -> Unit,
     private val onState: (EngineState) -> Unit,
+    private val onRoomDisbanded: (String) -> Unit,
+    private val onQuickMessage: (seat: Int, messageId: String, at: Long) -> Unit,
     private val onConnection: (ConnectionState) -> Unit,
     private val onServerError: (ServerError) -> Unit
 ) {
@@ -74,9 +78,17 @@ class OnlineClient(
                                 msg.resumeToken,
                                 msg.players,
                                 msg.aiCount,
-                                msg.requiredHumans
+                                msg.requiredHumans,
+                                msg.difficulty,
+                                msg.actionTimeoutSeconds
                             )
                             is NetMessage.State -> onState(msg.state)
+                            is NetMessage.RoomDisbanded -> onRoomDisbanded(msg.reason)
+                            is NetMessage.QuickMessage -> onQuickMessage(
+                                msg.seat,
+                                msg.messageId,
+                                msg.at
+                            )
                             is NetMessage.Error -> onServerError(msg.error)
                             NetMessage.Pong -> Unit
                         }
@@ -128,8 +140,17 @@ class OnlineClient(
         )
     }
 
-    fun createRoom(difficulty: AiDifficulty, aiCount: Int) {
-        webSocket?.send(GameProtocol.encodeCreate(name, playerId, authToken, difficulty, aiCount))
+    fun createRoom(difficulty: AiDifficulty, aiCount: Int, actionTimeoutSeconds: Int) {
+        webSocket?.send(
+            GameProtocol.encodeCreate(
+                name,
+                playerId,
+                authToken,
+                difficulty,
+                aiCount,
+                actionTimeoutSeconds
+            )
+        )
     }
 
     fun joinRoom(room: String) {
@@ -154,6 +175,14 @@ class OnlineClient(
 
     fun leaveRoom() {
         webSocket?.send(GameProtocol.encodeLeave())
+    }
+
+    fun disbandRoom() {
+        webSocket?.send(GameProtocol.encodeDisband())
+    }
+
+    fun sendQuickMessage(messageId: String) {
+        webSocket?.send(GameProtocol.encodeQuickMessage(messageId))
     }
 
     fun sendAction(seat: Int, action: RemoteAction) {

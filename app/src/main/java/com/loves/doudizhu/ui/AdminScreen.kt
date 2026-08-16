@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -71,6 +72,7 @@ fun AdminScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onSearch: (String) -> Unit,
+    onCreateAccount: (String, String) -> Unit,
     onResetPassword: (String, String) -> Unit,
     onSetAccountDisabled: (String, Boolean) -> Unit,
     onSetRegistrationEnabled: (Boolean) -> Unit
@@ -78,6 +80,7 @@ fun AdminScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var query by remember(state.query) { mutableStateOf(state.query) }
     var resetTarget by remember { mutableStateOf<AdminAccount?>(null) }
+    var showCreateAccount by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -188,6 +191,30 @@ fun AdminScreen(
                     ) {
                         Text("搜索")
                     }
+                    Button(
+                        onClick = { showCreateAccount = true },
+                        enabled = !state.creatingAccount,
+                        modifier = Modifier.height(50.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = AdminWax,
+                            contentColor = AdminPageBg
+                        )
+                    ) {
+                        if (state.creatingAccount) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.PersonAdd,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("创建账号")
+                        }
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(
@@ -240,6 +267,18 @@ fun AdminScreen(
             }
         )
     }
+    if (showCreateAccount) {
+        CreateAccountDialog(
+            loading = state.creatingAccount,
+            onDismiss = {
+                if (!state.creatingAccount) showCreateAccount = false
+            },
+            onConfirm = { nickname, password ->
+                showCreateAccount = false
+                onCreateAccount(nickname, password)
+            }
+        )
+    }
 }
 
 @Composable
@@ -283,6 +322,7 @@ private fun AccountRow(
                         append(account.nickname)
                         if (account.isAdmin) append(" · 管理员")
                         if (account.disabled) append(" · 已禁用")
+                        if (account.mustChangePassword) append(" · 待改密")
                     },
                     color = if (account.isAdmin) AdminWax else Color.White,
                     fontWeight = FontWeight.Bold,
@@ -334,6 +374,101 @@ private fun AccountRow(
             }
         }
     }
+}
+
+@Composable
+private fun CreateAccountDialog(
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit
+) {
+    var nickname by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    val cleanNickname = nickname.trim()
+    val error = when {
+        nickname.isNotEmpty() && cleanNickname.length !in 2..12 -> "账号名需要 2 到 12 个字符"
+        password.isNotEmpty() && password.length !in 6..64 -> "临时密码需要 6 到 64 个字符"
+        confirm.isNotEmpty() && password != confirm -> "两次输入的临时密码不一致"
+        else -> null
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("创建临时密码账号") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(.76f)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "该操作不受公开注册开关影响。用户首次登录后必须先修改密码，才能创建、加入或恢复房间。",
+                    color = AdminMuted,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = nickname,
+                    onValueChange = { nickname = it.take(12) },
+                    label = { Text("账号名 / 昵称") },
+                    singleLine = true,
+                    enabled = !loading,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it.take(64) },
+                    label = { Text("临时密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !loading,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = confirm,
+                    onValueChange = { confirm = it.take(64) },
+                    label = { Text("再次输入临时密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !loading,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                error?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, color = Color(0xFFF28B78), fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(cleanNickname, password) },
+                enabled = !loading &&
+                    cleanNickname.length in 2..12 &&
+                    password.length in 6..64 &&
+                    password == confirm,
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = AdminCoral
+                )
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("创建账号")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !loading) {
+                Text("取消")
+            }
+        }
+    )
 }
 
 @Composable
@@ -483,6 +618,7 @@ private fun auditActionText(action: String): String = when (action.uppercase()) 
     "ACCOUNT_DISABLED" -> "禁用账号"
     "ACCOUNT_ENABLED" -> "恢复账号"
     "PASSWORD_RESET" -> "重置密码"
+    "ACCOUNT_CREATED" -> "创建账号"
     "REGISTRATION_ENABLED" -> "开放注册"
     "REGISTRATION_DISABLED" -> "关闭注册"
     else -> action

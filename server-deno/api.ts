@@ -2,6 +2,7 @@ import {
   AuthError,
   changeOwnPassword,
   countAccounts,
+  createAccountForAdmin,
   getPublicAccount,
   getRegistrationSettings,
   listAccountsForAdmin,
@@ -147,6 +148,24 @@ export async function handleApiRequest(
           query: result.query,
         },
       });
+    }
+    if (req.method === "POST" && url.pathname === "/api/admin/accounts") {
+      const { account: actor } = await requireAdmin(req);
+      const body = await readJsonObject(req);
+      const account = await createAccountForAdmin(
+        String(body.nickname ?? body.username ?? ""),
+        String(body.temporaryPassword ?? body.password ?? ""),
+      );
+      await recordAdminAudit({
+        actorAccountId: actor.accountId,
+        actorNickname: actor.nickname,
+        action: "ACCOUNT_CREATED" as Parameters<
+          typeof recordAdminAudit
+        >[0]["action"],
+        targetAccountId: account.accountId,
+        targetNickname: account.nickname,
+      });
+      return json({ ok: true, data: { account } }, 201);
     }
     if (req.method === "GET" && url.pathname === "/api/admin/rooms") {
       await requireAdmin(req);

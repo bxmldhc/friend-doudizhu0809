@@ -38,6 +38,7 @@ fun DoudizhuApp(
     val inviteConfirmation by viewModel.inviteConfirmation.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
     val playerProfile by viewModel.playerProfile.collectAsState()
+    val quickMessage by viewModel.quickMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val voicePlayer = remember { GameVoicePlayer(context) }
@@ -97,6 +98,8 @@ fun DoudizhuApp(
                     nickname = state.nickname,
                     initialServerUrl = state.serverUrl,
                     initialAiCount = state.aiCount,
+                    initialDifficulty = state.difficulty,
+                    initialActionTimeoutSeconds = state.actionTimeoutSeconds,
                     onBack = viewModel::backHome,
                     onCreate = viewModel::createRoom
                 )
@@ -123,7 +126,8 @@ fun DoudizhuApp(
                     state = state,
                     onStart = viewModel::startHostGame,
                     onRetry = viewModel::retryConnection,
-                    onExit = viewModel::exitToHome
+                    onExit = viewModel::exitToHome,
+                    onDisband = viewModel::disbandRoom
                 )
                 is GameUiState.Playing -> GameScreen(
                     state = state,
@@ -135,9 +139,12 @@ fun DoudizhuApp(
                     onRestart = viewModel::restart,
                     onRetry = viewModel::retryConnection,
                     onExit = viewModel::exitToHome,
+                    onDisband = viewModel::disbandRoom,
+                    onQuickMessage = viewModel::sendQuickMessage,
                     onVoiceEnabledChange = viewModel::setVoiceEnabled,
                     onPlayerProfile = viewModel::openPlayerProfile,
-                    onDismissPlayerProfile = viewModel::dismissPlayerProfile
+                    onDismissPlayerProfile = viewModel::dismissPlayerProfile,
+                    quickMessage = quickMessage
                 )
                 is GameUiState.History -> HistoryScreen(
                     stats = state.stats,
@@ -158,6 +165,7 @@ fun DoudizhuApp(
                     onBack = viewModel::backHome,
                     onRetry = viewModel::retryAdmin,
                     onSearch = viewModel::searchAdminAccounts,
+                    onCreateAccount = viewModel::createAdminAccount,
                     onResetPassword = viewModel::resetAdminPassword,
                     onSetAccountDisabled = viewModel::setAdminAccountDisabled,
                     onSetRegistrationEnabled = viewModel::setRegistrationEnabled
