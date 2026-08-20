@@ -145,11 +145,20 @@ class DoudizhuEngine(
         private set
 
     fun startNewGame() {
+        dealGame(incrementGameNumber = true, message = "等待叫地主")
+    }
+
+    private fun redealAfterNoBid() {
+        dealGame(incrementGameNumber = false, message = "无人叫地主，已重新发牌")
+    }
+
+    private fun dealGame(incrementGameNumber: Boolean, message: String) {
         val previousScores = if (state.seats.size == 3) {
             state.seats.map { it.score }
         } else {
             listOf(0, 0, 0)
         }
+        val previousSeats = state.seats.takeIf { it.size == 3 }
 
         val deck = DECK.shuffled(random)
         val hands = List(3) { index ->
@@ -160,9 +169,18 @@ class DoudizhuEngine(
         val humanNames = listOf("玩家1", "玩家2", "玩家3")
         val aiNames = listOf("小智", "阿强", "老K")
         val seats = List(3) { index ->
-            val isHuman = index < config.humanCount
-            val name = if (isHuman) humanNames[index] else aiNames[index]
-            SeatState(index, name, isHuman, hands[index], false, previousScores[index])
+            val previous = previousSeats?.get(index)
+            val isHuman = previous?.isHuman ?: (index < config.humanCount)
+            val name = previous?.name ?: if (isHuman) humanNames[index] else aiNames[index]
+            SeatState(
+                index = index,
+                name = name,
+                isHuman = isHuman,
+                hand = hands[index],
+                isLandlord = false,
+                score = previousScores[index],
+                isAway = previous?.isAway ?: false
+            )
         }
 
         state = EngineState(
@@ -170,8 +188,8 @@ class DoudizhuEngine(
             seats = seats,
             turnIndex = random.nextInt(3),
             bottomCards = bottom,
-            message = "等待叫地主",
-            gameNumber = state.gameNumber + 1
+            message = message,
+            gameNumber = state.gameNumber + if (incrementGameNumber) 1 else 0
         )
     }
 
@@ -219,7 +237,7 @@ class DoudizhuEngine(
 
         if (acted == 3) {
             if (candidate == null) {
-                startNewGame()
+                redealAfterNoBid()
                 return
             }
 

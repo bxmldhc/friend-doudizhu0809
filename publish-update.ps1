@@ -1,12 +1,11 @@
 ﻿param(
-    [string]$VersionName = "1.6.0",
-    [int]$VersionCode = 8,
+    [string]$VersionName = "2.0.0",
+    [int]$VersionCode = 13,
     [string[]]$ReleaseNotes = @(
-        "首页新增牌局恢复入口，并支持意外断线自动重连",
-        "新增服务端授权的超级管理入口、账号查询和密码重置",
-        "管理页可查看账号、在线玩家和房间运行概览",
-        "登录失效与房间恢复失败改为结构化错误处理",
-        "补充 HTTPS/WSS 长期部署模板与操作说明"
+        "三人都不叫地主时自动重新洗牌发牌",
+        "新增地主与农民分阵营胜率",
+        "大幅优化困难 AI 的叫抢、农民配合和残局策略",
+        "优化 AI 对顺子、连对和飞机等牌型结构的保护"
     ),
     [switch]$ForceUpdate
 )
@@ -32,7 +31,19 @@ if (-not (Test-Path $apkSource)) {
 
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -Force $apkSource $apkTarget
-$sha256 = (Get-FileHash -Algorithm SHA256 $apkTarget).Hash.ToLowerInvariant()
+$sha256Algorithm = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $apkStream = [System.IO.File]::OpenRead($apkTarget)
+    try {
+        $sha256 = ([System.BitConverter]::ToString(
+            $sha256Algorithm.ComputeHash($apkStream)
+        ) -replace "-", "").ToLowerInvariant()
+    } finally {
+        $apkStream.Dispose()
+    }
+} finally {
+    $sha256Algorithm.Dispose()
+}
 
 $manifest = [ordered]@{
     versionCode = $VersionCode

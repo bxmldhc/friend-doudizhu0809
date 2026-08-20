@@ -130,4 +130,23 @@ class DoudizhuEngineTest {
 
         assertEquals(SeatAction.PASS, engine.state.lastActionsBySeat[passingSeat])
     }
+
+    @Test
+    fun allPlayersNotCallingRedealsWithoutAdvancingGameNumber() {
+        val engine = newEngine()
+        engine.startNewGame()
+        val gameNumber = engine.state.gameNumber
+        val originalHands = engine.state.seats.map { seat -> seat.hand }
+
+        repeat(3) { engine.submitCall(false) }
+
+        assertEquals(Phase.BIDDING, engine.state.phase)
+        assertEquals(gameNumber, engine.state.gameNumber)
+        assertEquals(0, engine.state.actedCount)
+        assertNull(engine.state.bidCandidateIndex)
+        assertEquals(listOf(17, 17, 17), engine.state.seats.map { it.hand.size })
+        assertEquals(3, engine.state.bottomCards.size)
+        assertTrue(engine.state.seats.map { it.hand } != originalHands)
+        assertTrue(engine.state.message.contains("重新发牌"))
+    }
 }
