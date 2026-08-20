@@ -74,6 +74,54 @@ Deno.test("首次发牌显示为第 1 局", () => {
   }
 });
 
+Deno.test("三人都不叫时同一局重新发牌", () => {
+  let seed = 20260820;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  const engine = new DoudizhuEngine(
+    { humanCount: 3, difficulty: "MEDIUM" },
+    random,
+  );
+  engine.startNewGame();
+  const gameNumber = engine.state.gameNumber;
+  const originalHands = engine.state.seats.map((seat) =>
+    seat.hand.map((card) => `${card.r}-${card.s}`).join(",")
+  );
+
+  engine.submitCall(false);
+  engine.submitCall(false);
+  engine.submitCall(false);
+
+  if (engine.state.phase !== "BIDDING") {
+    throw new Error("流局后未回到叫地主阶段");
+  }
+  if (engine.state.gameNumber !== gameNumber) {
+    throw new Error("流局重发不应增加局号");
+  }
+  if (
+    engine.state.actedCount !== 0 || engine.state.bidCandidateIndex !== null
+  ) {
+    throw new Error("流局重发没有重置叫地主状态");
+  }
+  if (
+    engine.state.seats.some((seat) => seat.hand.length !== 17) ||
+    engine.state.bottomCards.length !== 3
+  ) {
+    throw new Error("流局重发后的牌数不正确");
+  }
+  const redealtHands = engine.state.seats.map((seat) =>
+    seat.hand.map((card) => `${card.r}-${card.s}`).join(",")
+  );
+  if (redealtHands.every((hand, index) => hand === originalHands[index])) {
+    throw new Error("流局后没有重新洗牌");
+  }
+  if (!engine.state.message.includes("重新发牌")) {
+    throw new Error("流局重发缺少明确提示");
+  }
+});
+
 Deno.test("出牌按座位写入本轮独立出牌区，并保留兼容字段", () => {
   const engine = new DoudizhuEngine({ humanCount: 3, difficulty: "MEDIUM" });
   engine.state = playingState();

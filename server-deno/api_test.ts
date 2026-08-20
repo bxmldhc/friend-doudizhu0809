@@ -84,7 +84,24 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
         name: nickname,
         delta: 6,
         isAi: false,
-      }]);
+      }], {
+        matchId: `match-${crypto.randomUUID()}`,
+        roomCode: "123456",
+        startedAt: Date.now(),
+        round: {
+          gameNumber: 1,
+          finishedAt: Date.now(),
+          winnerPlayerId: accountId,
+          landlordPlayerId: accountId,
+          multiplier: 2,
+          players: [{
+            playerId: accountId,
+            name: nickname,
+            delta: 6,
+            isAi: false,
+          }],
+        },
+      });
 
       const { response, body } = await requestApi("/api/stats/me", {
         token,
@@ -97,6 +114,10 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
       assertEquals(body.data?.totalScore, 6, "累计分数");
       assertEquals(body.data?.games, 1, "累计局数");
       assertEquals(body.data?.wins, 1, "累计胜局");
+      assertEquals(body.data?.landlordGames, 1, "地主局数");
+      assertEquals(body.data?.landlordWins, 1, "地主胜局");
+      assertEquals(body.data?.farmerGames, 0, "农民局数");
+      assertEquals(body.data?.farmerWins, 0, "农民胜局");
       assertNoPasswordMaterial(body);
     });
 
@@ -141,7 +162,17 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
           assertEquals(body.data?.wins, 0, "公开胜局数");
           assertOnlyKeys(
             body.data,
-            ["playerId", "name", "totalScore", "games", "wins"],
+            [
+              "playerId",
+              "name",
+              "totalScore",
+              "games",
+              "wins",
+              "landlordGames",
+              "landlordWins",
+              "farmerGames",
+              "farmerWins",
+            ],
             "公开战绩字段",
           );
           assertNoPasswordMaterial(body);
@@ -155,6 +186,14 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
           assertEquals(emptyStats.body.data?.totalScore, 0, "无战绩累计分数");
           assertEquals(emptyStats.body.data?.games, 0, "无战绩局数");
           assertEquals(emptyStats.body.data?.wins, 0, "无战绩胜局数");
+          assertEquals(
+            emptyStats.body.data?.landlordGames,
+            0,
+            "无战绩地主局数",
+          );
+          assertEquals(emptyStats.body.data?.landlordWins, 0, "无战绩地主胜局");
+          assertEquals(emptyStats.body.data?.farmerGames, 0, "无战绩农民局数");
+          assertEquals(emptyStats.body.data?.farmerWins, 0, "无战绩农民胜局");
         } finally {
           if (otherToken) await kv.delete(["sessions", otherToken]);
           if (otherAccountId) {

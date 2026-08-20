@@ -104,6 +104,10 @@ export async function handleApiRequest(
           totalScore: stored?.totalScore ?? 0,
           games: stored?.games ?? 0,
           wins: stored?.wins ?? 0,
+          landlordGames: stored?.landlordGames ?? 0,
+          landlordWins: stored?.landlordWins ?? 0,
+          farmerGames: stored?.farmerGames ?? 0,
+          farmerWins: stored?.farmerWins ?? 0,
           recentMatches,
         },
       });
@@ -298,6 +302,10 @@ export async function handleApiRequest(
           totalScore: stored?.totalScore ?? 0,
           games: stored?.games ?? 0,
           wins: stored?.wins ?? 0,
+          landlordGames: stored?.landlordGames ?? 0,
+          landlordWins: stored?.landlordWins ?? 0,
+          farmerGames: stored?.farmerGames ?? 0,
+          farmerWins: stored?.farmerWins ?? 0,
         },
       });
     }

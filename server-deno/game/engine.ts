@@ -98,9 +98,20 @@ export class DoudizhuEngine {
   ) {}
 
   startNewGame() {
+    this.dealGame(true, "等待叫地主");
+  }
+
+  private redealAfterNoBid() {
+    this.dealGame(false, "无人叫地主，已重新发牌");
+  }
+
+  private dealGame(incrementGameNumber: boolean, message: string) {
     const previousScores = this.state.seats.length === 3
       ? this.state.seats.map((s) => s.score)
       : [0, 0, 0];
+    const previousSeats = this.state.seats.length === 3
+      ? this.state.seats
+      : null;
     const deck = shuffle(DECK, this.rand);
     const hands = [0, 1, 2].map((i) =>
       sortCards(deck.slice(i * 17, i * 17 + 17))
@@ -110,9 +121,10 @@ export class DoudizhuEngine {
     const aiNames = ["小智", "阿强", "老K"];
     const seats: SeatState[] = [0, 1, 2].map((i) => ({
       index: i,
-      name: i < this.config.humanCount ? humanNames[i] : aiNames[i],
-      isHuman: i < this.config.humanCount,
-      isAway: false,
+      name: previousSeats?.[i].name ??
+        (i < this.config.humanCount ? humanNames[i] : aiNames[i]),
+      isHuman: previousSeats?.[i].isHuman ?? i < this.config.humanCount,
+      isAway: previousSeats?.[i].isAway ?? false,
       hand: hands[i],
       isLandlord: false,
       score: previousScores[i],
@@ -138,8 +150,8 @@ export class DoudizhuEngine {
       seenRanks: {},
       winnerIndex: null,
       scoreDelta: [],
-      message: "等待叫地主",
-      gameNumber: this.state.gameNumber + 1,
+      message,
+      gameNumber: this.state.gameNumber + (incrementGameNumber ? 1 : 0),
     };
   }
 
@@ -183,7 +195,7 @@ export class DoudizhuEngine {
 
     if (acted === 3) {
       if (candidate === null) {
-        this.startNewGame();
+        this.redealAfterNoBid();
         return;
       }
       // If only the opening player called, confirm immediately. Any challenge

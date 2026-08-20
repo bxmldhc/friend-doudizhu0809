@@ -205,14 +205,77 @@ Deno.test("非紧急且只有炸弹能压时困难 AI 选择保留炸弹", () =>
   assertPass(action, "局势不紧急时不应为了普通一手牌使用炸弹");
 });
 
-Deno.test("困难 AI 可以连续完成 20 局且不产生非法动作", () => {
+Deno.test("地主作为下家报单时困难农民不主动送单张", () => {
+  const action = decide(
+    playingState({
+      aiHand: cards("3S", "4S", "4H", "7S", "8S"),
+      landlordHand: cards("10S"),
+    }),
+    "HARD",
+  );
+  const played = assertPlay(action, "地主下家报单时应改变领牌牌型");
+  const pattern = classify(played);
+
+  if (pattern?.type === "SINGLE") {
+    throw new Error("地主作为下家且只剩一张时不应主动领单张");
+  }
+});
+
+Deno.test("地主报单时队友领出的牌已有保护价值则不盲目抢牌权", () => {
+  const action = decide(
+    playingState({
+      aiHand: cards("KS", "AS", "4S", "4H", "7S"),
+      landlordHand: cards("10S"),
+      lastPlay: cards("QS"),
+      lastPlayerIndex: 2,
+    }),
+    "HARD",
+  );
+
+  assertPass(action, "不能确认封顶时应信任队友的高单张");
+});
+
+Deno.test("地主报单时困难农民可以用确定控制牌接住队友牌", () => {
+  const action = decide(
+    playingState({
+      aiHand: cards("B", "4S", "4H", "7S"),
+      landlordHand: cards("10S"),
+      lastPlay: cards("AS"),
+      lastPlayerIndex: 2,
+    }),
+    "HARD",
+  );
+  const played = assertPlay(action, "有确定控制牌时应阻止地主接牌");
+
+  if (classify(played)?.type !== "SINGLE" || played[0].r !== 17) {
+    throw new Error("应使用大王接住队友的单张并封住地主");
+  }
+});
+
+Deno.test("响应单张时优先保留完整顺子结构", () => {
+  const action = decide(
+    playingState({
+      aiHand: cards("4S", "5S", "6S", "7S", "8S", "JS"),
+      lastPlay: cards("3D"),
+      lastPlayerIndex: 0,
+    }),
+    "HARD",
+  );
+  const played = assertPlay(action, "有孤张可用时不应拆顺子响应");
+
+  if (classify(played)?.type !== "SINGLE" || played[0].r !== 11) {
+    throw new Error("应优先出顺子之外的 J");
+  }
+});
+
+Deno.test("困难 AI 可以连续完成 100 局且不产生非法动作", () => {
   let seed = 20260815;
   const random = () => {
     seed = (seed * 1664525 + 1013904223) >>> 0;
     return seed / 0x100000000;
   };
 
-  for (let game = 0; game < 20; game++) {
+  for (let game = 0; game < 100; game++) {
     const engine = new DoudizhuEngine(
       { humanCount: 0, difficulty: "HARD" },
       random,
