@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loves.wangyouge.network.AdminAccount
 import com.loves.wangyouge.network.AdminAuditRecord
+import com.loves.wangyouge.network.AdminOnlineAccount
 import com.loves.wangyouge.network.AdminRoom
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -72,6 +73,7 @@ fun AdminScreen(
     state: GameUiState.Admin,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onOnlineAccounts: List<AdminOnlineAccount>,
     onSearch: (String) -> Unit,
     onCreateAccount: (String, String) -> Unit,
     onResetPassword: (String, String) -> Unit,
@@ -129,8 +131,9 @@ fun AdminScreen(
                 contentColor = AdminWax
             ) {
                 Tab(selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("账号管理") })
-                Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("当前房间") })
-                Tab(selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("操作记录") })
+                Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("在线账号") })
+                Tab(selectedTab == 2, onClick = { selectedTab = 2 }, text = { Text("当前房间") })
+                Tab(selectedTab == 3, onClick = { selectedTab = 3 }, text = { Text("操作记录") })
             }
         }
 
@@ -254,6 +257,16 @@ fun AdminScreen(
                 }
             }
             selectedTab == 1 -> {
+                items(onOnlineAccounts, key = { "${it.nickname}-${it.roomCode}" }) { account ->
+                    OnlineAccountRow(account)
+                }
+                if (!state.loading && onOnlineAccounts.isEmpty()) {
+                    item(key = "online-empty") {
+                        AdminEmptyState("当前没有已登录的在线账号")
+                    }
+                }
+            }
+            selectedTab == 2 -> {
                 items(state.rooms, key = { it.roomCode }) { room ->
                     RoomRow(room)
                 }
@@ -263,7 +276,7 @@ fun AdminScreen(
                     }
                 }
             }
-            else -> {
+            selectedTab == 3 -> {
                 items(state.auditRecords, key = { it.auditId }) { record ->
                     AuditRow(record)
                 }
@@ -273,6 +286,7 @@ fun AdminScreen(
                     }
                 }
             }
+            else -> Unit
         }
     }
 
@@ -297,6 +311,35 @@ fun AdminScreen(
                 onCreateAccount(nickname, password)
             }
         )
+    }
+}
+
+@Composable
+private fun OnlineAccountRow(account: AdminOnlineAccount) {
+    Surface(
+        color = AdminPanel,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = .08f))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(account.nickname, color = Color.White, fontWeight = FontWeight.Bold)
+                Text(
+                    "${if (account.gameType == "GOMOKU") "五子棋" else "斗地主"} · 房间 ${account.roomCode}",
+                    color = AdminMuted,
+                    fontSize = 11.sp
+                )
+            }
+            Text(
+                "在线",
+                color = Color(0xFF7ED9A3),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
     }
 }
 

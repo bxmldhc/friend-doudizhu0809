@@ -14,6 +14,7 @@ import { parseCards } from "./cards.ts";
 import { resolveSession } from "./auth.ts";
 import { Pattern } from "./hand.ts";
 import { GomokuEngine } from "./gomoku.ts";
+import { chooseGomokuAiMove } from "./gomoku_ai.ts";
 
 interface Room {
   code: string;
@@ -87,6 +88,15 @@ export interface AdminRoomOverview {
   aiCount: number;
 }
 
+export interface AdminOnlineAccountSnapshot {
+  nickname: string;
+  online: true;
+  location: "ROOM";
+  gameType: GameType;
+  roomCode: string;
+  lastActiveAt: number;
+}
+
 interface RoomOperationResult {
   ok: boolean;
   code?: string;
@@ -94,6 +104,7 @@ interface RoomOperationResult {
 }
 
 const AI_NAMES = ["小智", "阿强", "老K"];
+const GOMOKU_AI_NAME = "棋灵";
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 export const DEFAULT_STALE_ROOM_GRACE_MS = 60_000;
 const DEFAULT_ACTION_TIMEOUT_SECONDS = 20;
@@ -158,7 +169,10 @@ export class RoomManager {
     do {
       code = String(Math.floor(100000 + Math.random() * 900000));
     } while (this.rooms.has(code));
-    const requiredHumans = gameType === "GOMOKU" ? 2 : 3 - aiCount;
+    const gomokuAi = gameType === "GOMOKU" && aiCount > 0;
+    const requiredHumans = gameType === "GOMOKU"
+      ? (gomokuAi ? 1 : 2)
+      : 3 - aiCount;
     const host = this.createParticipant(
       name,
       false,
@@ -175,6 +189,11 @@ export class RoomManager {
         playerIds[seat] = ai.id;
         names[seat] = ai.name;
       }
+    } else if (gomokuAi) {
+      const ai = this.createParticipant(GOMOKU_AI_NAME, true);
+      participants.set(ai.id, ai);
+      playerIds[1] = ai.id;
+      names[1] = ai.name;
     }
     const createdAt = Date.now();
     const actionTimeoutSeconds = ALLOWED_ACTION_TIMEOUT_SECONDS.has(
@@ -196,14 +215,16 @@ export class RoomManager {
       participants,
       roundHistory: [],
       lastRecordedGameNumber: 0,
-      readySeats: [0, 1, 2].map((seat) =>
-        gameType === "GOMOKU" ? false : seat >= requiredHumans
-      ),
+      readySeats: [0, 1, 2].map((seat) => {
+        if (seat >= this.seatCountForGame(gameType)) return true;
+        const playerId = playerIds[seat];
+        return playerId ? participants.get(playerId)?.isAi === true : false;
+      }),
       engine: null,
       gomoku: null,
       gameType,
       difficulty,
-      aiCount: gameType === "GOMOKU" ? 0 : aiCount,
+      aiCount: gameType === "GOMOKU" ? (gomokuAi ? 1 : 0) : aiCount,
       actionTimeoutMs: actionTimeoutSeconds * 1_000,
       quickMessageAt: [0, 0, 0],
       aiRunning: false,
@@ -596,6 +617,49 @@ export class RoomManager {
     };
   }
 
+  getAdminOnlineAccounts(): AdminOnlineAccountSnapshot[] {
+    const accounts = new Map<string, AdminOnlineAccountSnapshot>();
+
+    for (const room of this.rooms.values()) {
+      const requiredHumans = this.requiredHumans(room);
+      for (let seat = 0; seat < requiredHumans; seat++) {
+        const socket = room.sockets[seat];
+        const playerId = room.playerIds[seat];
+        if (
+          !socket ||
+          socket.readyState !== WebSocket.OPEN ||
+          !playerId ||
+          this.socketAccountIds.get(socket) !== playerId
+        ) {
+          continue;
+        }
+
+        const participant = room.participants.get(playerId);
+        if (!participant || participant.isAi || !participant.isAuthenticated) {
+          continue;
+        }
+
+        const snapshot: AdminOnlineAccountSnapshot = {
+          nickname: participant.name,
+          online: true,
+          location: "ROOM",
+          gameType: room.gameType,
+          roomCode: room.code,
+          lastActiveAt: room.lastActivityAt,
+        };
+        const existing = accounts.get(playerId);
+        if (!existing || snapshot.lastActiveAt > existing.lastActiveAt) {
+          accounts.set(playerId, snapshot);
+        }
+      }
+    }
+
+    return [...accounts.values()].sort((left, right) =>
+      right.lastActiveAt - left.lastActiveAt ||
+      left.nickname.localeCompare(right.nickname, "zh-CN")
+    );
+  }
+
   disconnect(ws: WebSocket) {
     const code = this.socketRoom.get(ws);
     if (!code) return;
@@ -882,10 +946,13 @@ export class RoomManager {
   }
 
   private hasOpenHumanConnection(room: Room): boolean {
-    const requiredHumans = this.requiredHumans(room);
     return room.sockets
-      .slice(0, requiredHumans)
-      .some((socket) => socket?.readyState === WebSocket.OPEN);
+      .slice(0, this.seatCount(room))
+      .some((socket, seat) => {
+        const playerId = room.playerIds[seat];
+        const participant = playerId ? room.participants.get(playerId) : null;
+        return participant?.isAi !== true && socket?.readyState === WebSocket.OPEN;
+      });
   }
 
   private sendRoom(room: Room, seat: number, ws: WebSocket) {
@@ -893,7 +960,7 @@ export class RoomManager {
       type: "ROOM",
       room: room.code,
       yourSeat: seat,
-      players: room.names.slice(0, this.requiredHumans(room)),
+      players: room.names.slice(0, this.seatCount(room)),
       hostSeat: room.hostSeat,
       resumeToken: room.resumeTokens[seat],
       aiCount: room.aiCount,
@@ -906,20 +973,26 @@ export class RoomManager {
   }
 
   private broadcastPlayers(room: Room) {
-    room.sockets.forEach((ws, seat) => {
+    room.sockets.slice(0, this.seatCount(room)).forEach((ws, seat) => {
       if (ws) this.sendRoom(room, seat, ws);
     });
   }
 
   private broadcastState(room: Room) {
     if (room.gomoku) {
+      const seatCount = this.seatCount(room);
       const connectedSeats = room.sockets
-        .slice(0, this.requiredHumans(room))
+        .slice(0, seatCount)
         .map((socket) => socket !== null);
-      const scores = room.playerIds.slice(0, this.requiredHumans(room)).map(
+      const aiSeats = room.playerIds.slice(0, seatCount).map(
+        (playerId) => playerId
+          ? room.participants.get(playerId)?.isAi === true
+          : false,
+      );
+      const scores = room.playerIds.slice(0, seatCount).map(
         (playerId) => playerId ? room.participants.get(playerId)?.score ?? 0 : 0,
       );
-      room.sockets.slice(0, this.requiredHumans(room)).forEach((ws) => {
+      room.sockets.slice(0, seatCount).forEach((ws) => {
         if (ws) {
           send(ws, {
             type: "STATE",
@@ -927,6 +1000,7 @@ export class RoomManager {
               room.gomoku!.state,
               room.names,
               connectedSeats,
+              aiSeats,
               scores,
               {
                 leaderboard: this.buildLeaderboard(room),
@@ -997,13 +1071,14 @@ export class RoomManager {
     seat: number,
     row: number,
     col: number,
+    automatic = false,
   ) {
     const gomoku = room.gomoku;
     if (!gomoku) return;
     try {
       gomoku.submitMove(seat, row, col);
       this.touchRoom(room);
-      this.markEvent(room, "GOMOKU_MOVE", seat, false, undefined, row, col);
+      this.markEvent(room, "GOMOKU_MOVE", seat, automatic, undefined, row, col);
       if (gomoku.state.phase === "FINISHED") {
         this.recordFinishedGomokuRound(room);
       }
@@ -1033,6 +1108,7 @@ export class RoomManager {
     this.cancelTurnTimer(room);
     if (room.gomoku) {
       this.broadcastState(room);
+      this.scheduleGomokuAi(room);
       return;
     }
     const engine = room.engine;
@@ -1050,6 +1126,33 @@ export class RoomManager {
     }
     this.broadcastState(room);
     if (engine.isAiTurn()) this.scheduleAi(room);
+  }
+
+  private scheduleGomokuAi(room: Room) {
+    const gomoku = room.gomoku;
+    if (!gomoku || gomoku.state.phase !== "PLAYING" || room.aiRunning) return;
+    const aiSeat = gomoku.state.turnIndex;
+    const playerId = room.playerIds[aiSeat];
+    if (!playerId || room.participants.get(playerId)?.isAi !== true) return;
+
+    room.aiRunning = true;
+    const timer = setTimeout(() => {
+      try {
+        if (
+          room.gomoku?.state.phase !== "PLAYING" ||
+          room.gomoku.state.turnIndex !== aiSeat
+        ) {
+          return;
+        }
+        const move = chooseGomokuAiMove(room.gomoku.state, aiSeat);
+        if (move) {
+          this.applyGomokuMove(room, aiSeat, move.row, move.col, true);
+        }
+      } finally {
+        room.aiRunning = false;
+      }
+    }, this.options.aiDelayMs ?? 650);
+    Deno.unrefTimer(timer);
   }
 
   private cancelTurnTimer(room: Room) {
@@ -1231,8 +1334,12 @@ export class RoomManager {
 
   private pickNewHost(room: Room): number {
     const candidates = room.sockets
-      .slice(0, this.requiredHumans(room))
-      .map((socket, seat) => socket ? seat : -1)
+      .slice(0, this.seatCount(room))
+      .map((socket, seat) => {
+        const playerId = room.playerIds[seat];
+        const participant = playerId ? room.participants.get(playerId) : null;
+        return socket && participant?.isAi !== true ? seat : -1;
+      })
       .filter((seat) => seat >= 0);
     if (candidates.length === 0) return -1;
     return candidates[Math.floor(Math.random() * candidates.length)];
@@ -1281,9 +1388,9 @@ export class RoomManager {
   }
 
   private toAdminRoomSnapshot(room: Room): AdminRoomSnapshot {
-    const requiredHumans = this.requiredHumans(room);
+    const seatCount = this.seatCount(room);
     const seats = Array.from(
-      { length: requiredHumans },
+      { length: seatCount },
       (_, seat): AdminRoomSeatSnapshot => {
       const playerId = room.playerIds[seat];
       const participant = playerId ? room.participants.get(playerId) : null;
@@ -1311,11 +1418,18 @@ export class RoomManager {
       aiCount: room.aiCount,
       actionTimeoutSeconds: room.actionTimeoutMs / 1_000,
       connectedHumanCount: room.sockets
-        .slice(0, requiredHumans)
-        .filter((socket) => socket !== null).length,
+        .slice(0, seatCount)
+        .filter((socket, seat) => {
+          const playerId = room.playerIds[seat];
+          return socket !== null &&
+            room.participants.get(playerId ?? "")?.isAi !== true;
+        }).length,
       occupiedHumanCount: room.playerIds
-        .slice(0, requiredHumans)
-        .filter((playerId) => playerId !== null).length,
+        .slice(0, seatCount)
+        .filter((playerId) =>
+          playerId !== null &&
+          room.participants.get(playerId)?.isAi !== true
+        ).length,
       hostSeat: room.hostSeat,
       hostName: room.hostSeat >= 0 ? seats[room.hostSeat]?.name ?? null : null,
       seats,
@@ -1406,7 +1520,7 @@ export class RoomManager {
         name: participant.name,
         delta,
         totalScore: participant.score,
-        isAi: false,
+        isAi: participant.isAi,
       }];
     });
     room.roundHistory.push({
@@ -1434,7 +1548,7 @@ export class RoomManager {
 
   private resetReadySeats(room: Room) {
     room.readySeats = [0, 1, 2].map((seat) => {
-      if (seat >= this.requiredHumans(room)) return true;
+      if (seat >= this.seatCount(room)) return true;
       const participant = room.playerIds[seat]
         ? room.participants.get(room.playerIds[seat]!)
         : null;
@@ -1446,7 +1560,15 @@ export class RoomManager {
   }
 
   private requiredHumans(room: Room): number {
-    return room.gameType === "GOMOKU" ? 2 : 3 - room.aiCount;
+    return room.gameType === "GOMOKU" ? 2 - room.aiCount : 3 - room.aiCount;
+  }
+
+  private seatCount(room: Room): number {
+    return this.seatCountForGame(room.gameType);
+  }
+
+  private seatCountForGame(gameType: GameType): number {
+    return gameType === "GOMOKU" ? 2 : 3;
   }
 
   private isRoundInProgress(room: Room): boolean {

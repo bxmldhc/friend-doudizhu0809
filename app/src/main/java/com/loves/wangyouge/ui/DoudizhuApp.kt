@@ -87,7 +87,8 @@ fun DoudizhuApp(
                     state = state,
                     onCreate = viewModel::openCreateRoom,
                     onJoin = viewModel::openJoinRoom,
-                    onOpenGomoku = viewModel::openGomoku,
+                    onCreateGomoku = { viewModel.createGomokuRoom(state.serverUrl) },
+                    onJoinGomoku = { room -> viewModel.joinGomokuRoom(room, state.serverUrl) },
                     onHistory = viewModel::openHistory,
                     onResume = viewModel::resumeSavedRoom,
                     onAdmin = viewModel::openAdmin,
@@ -151,6 +152,9 @@ fun DoudizhuApp(
                     state = state,
                     onBack = viewModel::backHome,
                     onCreate = viewModel::createGomokuRoom,
+                    onCreateWithAi = { serverUrl ->
+                        viewModel.createGomokuRoom(serverUrl, withAi = true)
+                    },
                     onJoin = viewModel::joinGomokuRoom
                 )
                 is GameUiState.GomokuLobby -> GomokuLobbyScreen(
@@ -187,6 +191,7 @@ fun DoudizhuApp(
                     state = state,
                     onBack = viewModel::backHome,
                     onRetry = viewModel::retryAdmin,
+                    onOnlineAccounts = state.onlineAccounts,
                     onSearch = viewModel::searchAdminAccounts,
                     onCreateAccount = viewModel::createAdminAccount,
                     onResetPassword = viewModel::resetAdminPassword,

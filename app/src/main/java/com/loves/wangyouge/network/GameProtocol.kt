@@ -215,6 +215,7 @@ object GameProtocol {
             GomokuSeat(
                 index = seat.getInt("index"),
                 name = seat.optString("name", "玩家${index + 1}"),
+                isAi = seat.optBoolean("isAi", false),
                 isAway = seat.optBoolean("isAway", false),
                 stone = seat.optString("stone", if (index == 0) "BLACK" else "WHITE"),
                 score = seat.optInt("score", 0)

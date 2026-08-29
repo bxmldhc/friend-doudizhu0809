@@ -21,6 +21,7 @@ enum class GomokuPhase {
 data class GomokuSeat(
     val index: Int,
     val name: String,
+    val isAi: Boolean,
     val isAway: Boolean,
     val stone: String,
     val score: Int

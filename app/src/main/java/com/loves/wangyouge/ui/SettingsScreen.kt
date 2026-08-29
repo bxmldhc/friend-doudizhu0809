@@ -11,13 +11,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -117,7 +117,8 @@ fun HomeScreen(
     state: GameUiState.Home,
     onCreate: () -> Unit,
     onJoin: () -> Unit,
-    onOpenGomoku: () -> Unit,
+    onCreateGomoku: () -> Unit,
+    onJoinGomoku: (String) -> Unit,
     onHistory: () -> Unit,
     onResume: () -> Unit,
     onAdmin: () -> Unit,
@@ -132,9 +133,13 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize().alpha(0.5f),
             contentScale = ContentScale.Crop
         )
-        val compact = maxHeight < 500.dp || maxWidth < 900.dp
-        val pagePadding = if (compact) 14.dp else 28.dp
-        val sectionGap = if (compact) 12.dp else 24.dp
+        val compact = maxHeight < 500.dp || maxWidth < 1_000.dp
+        val pagePadding = if (compact) 14.dp else 24.dp
+        val sectionGap = if (compact) 12.dp else 20.dp
+        val sidebarWidth = if (compact) 168.dp else 212.dp
+        val toolbarWidth = if (compact) 64.dp else 76.dp
+        var selectedGame by remember { mutableStateOf(HomeGame.DOUDIZHU) }
+        var gomokuRoomCode by remember { mutableStateOf("") }
 
         Row(
             modifier = Modifier
@@ -144,26 +149,33 @@ fun HomeScreen(
         ) {
             Column(
                 modifier = Modifier
-                    .weight(if (compact) 0.68f else 0.76f)
-                    .fillMaxSize()
+                    .width(sidebarWidth)
+                    .fillMaxHeight()
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("FRIENDS / PLAY", color = Wax, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Image(
-                    painter = painterResource(
-                        if (state.isAdmin) R.drawable.wangyouge_avatar_admin
-                        else R.drawable.wangyouge_avatar_default
-                    ),
-                    contentDescription = "当前账号头像",
-                    modifier = Modifier.size(if (compact) 52.dp else 66.dp)
-                )
-                Text(state.nickname.ifBlank { "未登录" }, color = Color.White, fontSize = if (compact) 20.sp else 25.sp, fontWeight = FontWeight.Medium)
-                Text(
-                    text = "熟人房间 · 已登录",
-                    color = Muted,
-                    fontSize = 12.sp
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Image(
+                        painter = painterResource(
+                            if (state.isAdmin) R.drawable.wangyouge_avatar_admin
+                            else R.drawable.wangyouge_avatar_default
+                        ),
+                        contentDescription = "当前账号头像",
+                        modifier = Modifier.size(if (compact) 42.dp else 52.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            state.nickname.ifBlank { "未登录" },
+                            color = Color.White,
+                            fontSize = if (compact) 16.sp else 20.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                        Text("好友小游戏", color = Muted, fontSize = 11.sp)
+                    }
+                }
                 HomeInfoRow(
                     iconRes = when (state.connection) {
                         AppConnectionState.ONLINE -> R.drawable.wangyouge_status_online
@@ -174,7 +186,7 @@ fun HomeScreen(
                     title = connectionText(state.connection),
                     subtitle = "服务器连接状态"
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(if (compact) 0.dp else 4.dp))
                 HomeCompactAction(
                     icon = { Icon(Icons.Default.History, null, tint = Color.White) },
                     title = "最近战绩",
@@ -209,115 +221,204 @@ fun HomeScreen(
                 }
             }
             Surface(
-                modifier = Modifier.weight(if (compact) 1.72f else 1.86f).fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 color = Color(0xE612343B),
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(if (compact) 16.dp else 26.dp),
-                    verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp)
+                        .padding(if (compact) 16.dp else 22.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)
                 ) {
-                    Text("今晚玩什么", color = Wax, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text("好友小游戏", color = Color.White, fontSize = if (compact) 30.sp else 42.sp, fontWeight = FontWeight.Medium)
-                    Text("和朋友，随时玩一局", color = Muted, fontSize = if (compact) 13.sp else 15.sp)
-                    Surface(color = Color(0xEA16434A), shape = RoundedCornerShape(8.dp)) {
-                        Column(
-                            modifier = Modifier.padding(if (compact) 16.dp else 24.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("可以立即开始", color = Color(0xFF7ED9A3), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        "好友斗地主",
-                                        color = Color.White,
-                                        fontSize = if (compact) 24.sp else 30.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Text("三人联机，支持 AI 补位", color = Color(0xFFD4E8E4), fontSize = 12.sp)
-                                }
-                                Image(
-                                    painter = painterResource(R.drawable.wangyouge_game_doudizhu),
-                                    contentDescription = "斗地主",
-                                    modifier = Modifier.size(if (compact) 86.dp else 112.dp),
-                                    contentScale = ContentScale.Fit
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Button(
-                                    onClick = onCreate,
-                                    modifier = Modifier.height(50.dp),
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("创建房间", fontWeight = FontWeight.Bold)
-                                }
-                                OutlinedButton(onClick = onJoin, modifier = Modifier.height(50.dp)) {
-                                    Icon(Icons.Default.Link, null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("加入房间", fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            state.resumeRoomCode?.let { room ->
-                                OutlinedButton(
-                                    onClick = onResume,
-                                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Wax)
-                                ) {
-                                    Icon(Icons.Default.Restore, null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("继续房间 $room", fontWeight = FontWeight.Bold)
-                                    state.resumeSavedAt?.let {
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("· ${resumeTimeDescription(it)}", fontSize = 11.sp)
-                                    }
-                                }
-                            }
+                    HomeGameHero(
+                        selectedGame = selectedGame,
+                        compact = compact,
+                        roomCode = gomokuRoomCode,
+                        onRoomCodeChange = { gomokuRoomCode = it.filter(Char::isDigit).take(6) },
+                        onCreateDoudizhu = onCreate,
+                        onJoinDoudizhu = onJoin,
+                        onResumeDoudizhu = onResume,
+                        resumeRoomCode = state.resumeRoomCode,
+                        resumeSavedAt = state.resumeSavedAt,
+                        onCreateGomoku = onCreateGomoku,
+                        onJoinGomoku = { onJoinGomoku(gomokuRoomCode) }
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (selectedGame != HomeGame.DOUDIZHU) {
+                            HomeGameTile(
+                                modifier = Modifier.weight(1f),
+                                imageRes = R.drawable.wangyouge_game_doudizhu,
+                                title = "斗地主",
+                                onClick = { selectedGame = HomeGame.DOUDIZHU }
+                            )
                         }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        HomeGamePlaceholder(
-                            modifier = Modifier.weight(1f),
-                            imageRes = R.drawable.wangyouge_game_gomoku,
-                            title = "五子棋",
-                            subtitle = "和朋友落子对弈",
-                            onClick = onOpenGomoku
-                        )
-                        HomeGamePlaceholder(
+                        if (selectedGame != HomeGame.GOMOKU) {
+                            HomeGameTile(
+                                modifier = Modifier.weight(1f),
+                                imageRes = R.drawable.wangyouge_game_gomoku,
+                                title = "五子棋",
+                                onClick = { selectedGame = HomeGame.GOMOKU }
+                            )
+                        }
+                        HomeGameTile(
                             modifier = Modifier.weight(1f),
                             imageRes = R.drawable.wangyouge_game_more,
                             title = "更多小游戏",
-                            subtitle = "后续持续加入",
+                            enabled = false,
+                            onClick = {}
+                        )
+                        HomeGameTile(
+                            modifier = Modifier.weight(1f),
+                            imageRes = R.drawable.wangyouge_game_more,
+                            title = "敬请期待",
+                            enabled = false,
                             onClick = {}
                         )
                     }
                 }
             }
-            LazyColumn(
+            Column(
                 modifier = Modifier
-                    .width(if (compact) 68.dp else 88.dp)
-                    .fillMaxSize(),
+                    .width(toolbarWidth)
+                    .fillMaxHeight(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 22.dp)
             ) {
-                item {
-                    HomeNavigationItem(
-                        label = "战绩",
-                        onClick = onHistory
+                HomeNavigationItem(
+                    label = "战绩",
+                    onClick = onHistory
+                ) {
+                    Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
+                }
+                HomeNavigationItem(
+                    label = "检查更新",
+                    onClick = onCheckUpdate
+                ) {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
+                }
+            }
+        }
+    }
+}
+
+private enum class HomeGame {
+    DOUDIZHU,
+    GOMOKU
+}
+
+@Composable
+private fun HomeGameHero(
+    selectedGame: HomeGame,
+    compact: Boolean,
+    roomCode: String,
+    onRoomCodeChange: (String) -> Unit,
+    onCreateDoudizhu: () -> Unit,
+    onJoinDoudizhu: () -> Unit,
+    onResumeDoudizhu: () -> Unit,
+    resumeRoomCode: String?,
+    resumeSavedAt: Long?,
+    onCreateGomoku: () -> Unit,
+    onJoinGomoku: () -> Unit
+) {
+    val isDoudizhu = selectedGame == HomeGame.DOUDIZHU
+    val title = if (isDoudizhu) "好友斗地主" else "五子棋"
+    val detail = if (isDoudizhu) "三人联机，支持 AI 补位" else "双人联机，黑方先行"
+    val imageRes = if (isDoudizhu) R.drawable.wangyouge_game_doudizhu else R.drawable.wangyouge_game_gomoku
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xEA16434A),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(if (compact) 16.dp else 22.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (isDoudizhu) "三人牌局" else "双人对弈",
+                        color = Color(0xFF7ED9A3),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        title,
+                        color = Color.White,
+                        fontSize = if (compact) 25.sp else 32.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(detail, color = Color(0xFFD4E8E4), fontSize = 12.sp)
+                }
+                Image(
+                    painter = painterResource(imageRes),
+                    contentDescription = title,
+                    modifier = Modifier
+                        .size(if (compact) 92.dp else 118.dp)
+                        .padding(start = 8.dp),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            if (isDoudizhu) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = onCreateDoudizhu,
+                        modifier = Modifier.height(50.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
                     ) {
-                        Icon(Icons.Default.History, contentDescription = "最近战绩", tint = Color.White)
+                        Icon(Icons.Default.PlayArrow, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("创建房间", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(onClick = onJoinDoudizhu, modifier = Modifier.height(50.dp)) {
+                        Icon(Icons.Default.Link, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("加入房间", fontWeight = FontWeight.Bold)
                     }
                 }
-                item {
-                    HomeNavigationItem(
-                        label = "检查更新",
-                        onClick = onCheckUpdate
+                resumeRoomCode?.let { room ->
+                    OutlinedButton(
+                        onClick = onResumeDoudizhu,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Wax)
                     ) {
-                        Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
+                        Icon(Icons.Default.Restore, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("继续房间 $room", fontWeight = FontWeight.Bold)
+                        resumeSavedAt?.let {
+                            Spacer(Modifier.width(6.dp))
+                            Text("· ${resumeTimeDescription(it)}", fontSize = 11.sp)
+                        }
+                    }
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = onCreateGomoku,
+                        modifier = Modifier.height(50.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("创建房间", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedTextField(
+                        value = roomCode,
+                        onValueChange = onRoomCodeChange,
+                        modifier = Modifier.weight(1f),
+                        label = { Text("六位房号") },
+                        singleLine = true
+                    )
+                    OutlinedButton(
+                        onClick = onJoinGomoku,
+                        enabled = roomCode.length == 6,
+                        modifier = Modifier.height(56.dp)
+                    ) {
+                        Text("加入")
                     }
                 }
             }
@@ -359,7 +460,7 @@ private fun HomeCompactAction(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 7.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon() }
@@ -374,34 +475,40 @@ private fun HomeCompactAction(
 }
 
 @Composable
-private fun HomeGamePlaceholder(
+private fun HomeGameTile(
     modifier: Modifier,
     imageRes: Int,
     title: String,
-    subtitle: String,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
-        modifier = modifier.heightIn(min = 76.dp),
+        enabled = enabled,
+        modifier = modifier.heightIn(min = 92.dp),
         color = SurfaceBg,
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        border = null
     ) {
-        Row(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             Image(
                 painter = painterResource(imageRes),
                 contentDescription = null,
-                modifier = Modifier.size(42.dp),
-                contentScale = ContentScale.Fit
+                modifier = Modifier.size(48.dp),
+                contentScale = ContentScale.Crop
             )
-            Spacer(Modifier.width(8.dp))
-            Column {
-                Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, color = Muted, fontSize = 11.sp)
-            }
+            Spacer(Modifier.height(5.dp))
+            Text(
+                title,
+                color = if (enabled) Color.White else Muted,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -890,5 +997,5 @@ private fun connectionText(state: AppConnectionState): String = when (state) {
     AppConnectionState.ONLINE -> "服务器在线"
     AppConnectionState.CONNECTING -> "正在连接服务器"
     AppConnectionState.RECONNECTING -> "正在重新连接"
-    AppConnectionState.OFFLINE -> "尚未连接"
+    AppConnectionState.OFFLINE -> "未进入房间"
 }

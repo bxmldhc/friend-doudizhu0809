@@ -15,7 +15,11 @@ import {
   setAccountDisabled,
   setRegistrationEnabled,
 } from "./game/auth.ts";
-import type { AdminRoomOverview, AdminRoomSnapshot } from "./game/rooms.ts";
+import type {
+  AdminOnlineAccountSnapshot,
+  AdminRoomOverview,
+  AdminRoomSnapshot,
+} from "./game/rooms.ts";
 import {
   getRecentMatches,
   getStats,
@@ -26,6 +30,7 @@ import {
 export interface AdminRoomReader {
   getAdminOverview(): AdminRoomOverview;
   getAdminRoomSnapshots(): AdminRoomSnapshot[];
+  getAdminOnlineAccounts(): AdminOnlineAccountSnapshot[];
 }
 
 export interface ApiDependencies {
@@ -178,6 +183,16 @@ export async function handleApiRequest(
         ok: true,
         data: {
           rooms: roomManager.getAdminRoomSnapshots(),
+        },
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/admin/online") {
+      await requireAdmin(req);
+      const roomManager = requireRoomManager(dependencies);
+      return json({
+        ok: true,
+        data: {
+          accounts: roomManager.getAdminOnlineAccounts(),
         },
       });
     }

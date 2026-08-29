@@ -53,7 +53,7 @@ Deno.test("五子棋房间使用两人配置，并通过统一 STATE 广播服�
     socket(host),
     "host",
     "MEDIUM",
-    2,
+    0,
     "",
     false,
     20,
@@ -117,6 +117,55 @@ Deno.test("五子棋房间使用两人配置，并通过统一 STATE 广播服�
   );
   if (latest(host, "ERROR").code !== "INVALID_ACTION") {
     throw new Error("Out-of-turn move was not rejected");
+  }
+});
+
+Deno.test("Gomoku AI room starts with one human and responds through the server", async () => {
+  const manager = new RoomManager({ persistStats: false, aiDelayMs: 1 });
+  const host = new FakeSocket();
+  manager.create(
+    socket(host),
+    "host",
+    "MEDIUM",
+    1,
+    "",
+    false,
+    20,
+    "GOMOKU",
+  );
+
+  const created = latest(host, "ROOM");
+  if (
+    created.requiredHumans !== 1 ||
+    created.aiCount !== 1 ||
+    JSON.stringify(created.players) !== JSON.stringify(["host", "棋灵"])
+  ) {
+    throw new Error("Gomoku AI room metadata is incorrect");
+  }
+
+  manager.start(socket(host));
+  const initial = gomokuState(host);
+  const seats = initial.seats as Record<string, unknown>[];
+  if (
+    initial.phase !== "PLAYING" ||
+    seats.length !== 2 ||
+    seats[1].name !== "棋灵" ||
+    seats[1].isAi !== true
+  ) {
+    throw new Error("Gomoku AI room did not start as a two-seat match");
+  }
+
+  move(manager, host, 0, 7, 7);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const afterAiMove = gomokuState(host);
+  const event = afterAiMove.lastEvent as Record<string, unknown>;
+  if (
+    afterAiMove.moveCount !== 2 ||
+    event.type !== "GOMOKU_MOVE" ||
+    event.seat !== 1 ||
+    event.automatic !== true
+  ) {
+    throw new Error("Gomoku AI did not respond with a server-authoritative move");
   }
 });
 

@@ -95,6 +95,17 @@ data class AdminRoomList(
     val total: Int
 )
 
+data class AdminOnlineAccount(
+    val nickname: String,
+    val gameType: String,
+    val roomCode: String,
+    val lastActiveAt: Long
+)
+
+data class AdminOnlineAccountList(
+    val accounts: List<AdminOnlineAccount>
+)
+
 data class AccountStats(
     val playerId: String,
     val totalScore: Int,
@@ -352,6 +363,21 @@ class AuthApi(
                 authToken = authToken
             ),
             parser = AuthResponseParser::parseAdminRooms
+        )
+    }
+
+    suspend fun adminOnlineAccounts(
+        baseUrl: String,
+        authToken: String
+    ): ApiResult<AdminOnlineAccountList> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/admin/online",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseAdminOnlineAccounts
         )
     }
 
@@ -700,6 +726,23 @@ internal object AuthResponseParser {
             total = firstInt(metadata, "total", "roomCount", "totalRooms")
                 .takeIf { it > 0 } ?: rooms.size
         )
+    }
+
+    fun parseAdminOnlineAccounts(root: JSONObject): AdminOnlineAccountList {
+        val data = root.optJSONObject("data") ?: root
+        val array = data.optJSONArray("accounts")
+        val accounts = if (array == null) emptyList() else {
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                AdminOnlineAccount(
+                    nickname = item.optString("nickname"),
+                    gameType = item.optString("gameType", "DOUDIZHU"),
+                    roomCode = item.optString("roomCode"),
+                    lastActiveAt = item.optLong("lastActiveAt")
+                )
+            }
+        }
+        return AdminOnlineAccountList(accounts)
     }
 
     fun parseResetPassword(root: JSONObject): AdminAccount {

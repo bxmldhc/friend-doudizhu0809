@@ -16,6 +16,7 @@ import com.loves.wangyouge.network.AccountStats
 import com.loves.wangyouge.network.AdminAccount
 import com.loves.wangyouge.network.AdminAuditRecord
 import com.loves.wangyouge.network.AdminOverview
+import com.loves.wangyouge.network.AdminOnlineAccount
 import com.loves.wangyouge.network.AdminRoom
 import com.loves.wangyouge.network.ApiResult
 import com.loves.wangyouge.network.AuthApi
@@ -183,6 +184,7 @@ sealed interface GameUiState {
         val overview: AdminOverview? = null,
         val accounts: List<AdminAccount> = emptyList(),
         val rooms: List<AdminRoom> = emptyList(),
+        val onlineAccounts: List<AdminOnlineAccount> = emptyList(),
         val auditRecords: List<AdminAuditRecord> = emptyList(),
         val registrationEnabled: Boolean = true,
         val loading: Boolean = true,
@@ -701,12 +703,16 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 query
             )
             val rooms = authApi.adminRooms(httpBaseUrl(lastServerUrl), session.authToken)
+            val online = authApi.adminOnlineAccounts(
+                httpBaseUrl(lastServerUrl),
+                session.authToken
+            )
             val registration = authApi.adminRegistration(
                 httpBaseUrl(lastServerUrl),
                 session.authToken
             )
             val audit = authApi.adminAudit(httpBaseUrl(lastServerUrl), session.authToken)
-            val failure = listOf(overview, accounts, rooms, registration, audit)
+            val failure = listOf(overview, accounts, rooms, online, registration, audit)
                 .filterIsInstance<ApiResult.Failure>()
                 .firstOrNull()
             if (failure != null) {
@@ -730,6 +736,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 overview = (overview as ApiResult.Success).data,
                 accounts = (accounts as ApiResult.Success).data.accounts,
                 rooms = (rooms as ApiResult.Success).data.rooms,
+                onlineAccounts = (online as ApiResult.Success).data.accounts,
                 registrationEnabled = (registration as ApiResult.Success).data.enabled,
                 auditRecords = (audit as ApiResult.Success).data.records,
                 loading = false,
@@ -925,11 +932,11 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
-    fun createGomokuRoom(serverUrl: String) {
+    fun createGomokuRoom(serverUrl: String, withAi: Boolean = false) {
         val session = authSession ?: return showAuth()
         if (!requirePasswordChanged(session)) return
         config = GameConfig(
-            humanCount = 2,
+            humanCount = if (withAi) 2 else 3,
             difficulty = AiDifficulty.MEDIUM,
             actionTimeoutSeconds = 20
         ).normalized()

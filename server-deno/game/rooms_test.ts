@@ -790,6 +790,76 @@ Deno.test("密码重置后已连接账号不能继续操作", async () => {
   }
 });
 
+Deno.test("管理员在线列表只包含已认证且连接仍打开的真人账号", async () => {
+  const previousIterations = Deno.env.get("AUTH_PBKDF2_ITERATIONS");
+  Deno.env.set("AUTH_PBKDF2_ITERATIONS", "10000");
+  const nickname = `在线玩家${crypto.randomUUID().slice(0, 6)}`;
+  let accountId = "";
+  let token = "";
+
+  try {
+    const account = await registerAccount(nickname, "secret12");
+    accountId = account.account.accountId;
+    token = account.token;
+    const manager = new RoomManager({ persistStats: false });
+    const authenticated = new FakeSocket();
+    const guest = new FakeSocket();
+
+    await manager.handleMessage(
+      socket(authenticated),
+      JSON.stringify({
+        type: "CREATE",
+        authToken: token,
+        difficulty: "MEDIUM",
+        aiCount: 1,
+      }),
+    );
+    const code = roomCode(authenticated);
+    manager.join(socket(guest), code, "游客");
+
+    const online = manager.getAdminOnlineAccounts();
+    if (online.length !== 1) {
+      throw new Error("在线列表不应包含 AI 或未认证游客");
+    }
+    const snapshot = online[0];
+    if (
+      snapshot.nickname !== nickname ||
+      snapshot.online !== true ||
+      snapshot.location !== "ROOM" ||
+      snapshot.gameType !== "DOUDIZHU" ||
+      snapshot.roomCode !== code ||
+      typeof snapshot.lastActiveAt !== "number"
+    ) {
+      throw new Error("在线账号快照字段不正确");
+    }
+    if (
+      JSON.stringify(snapshot).match(
+        /accountId|token|password|ip|resumeToken/i,
+      )
+    ) {
+      throw new Error("在线账号快照泄露了敏感身份字段");
+    }
+
+    manager.disconnect(socket(authenticated));
+    if (manager.getAdminOnlineAccounts().length !== 0) {
+      throw new Error("已断线账号不应继续出现在在线列表");
+    }
+  } finally {
+    if (token) await kv.delete(["sessions", token]);
+    if (accountId) {
+      await kv.delete(["accounts", accountId]);
+      await kv.delete(["accountByNickname", nickname.toLocaleLowerCase("zh-CN")]);
+      await kv.delete(["players", accountId]);
+      await kv.delete(["recentMatches", accountId]);
+    }
+    if (previousIterations === undefined) {
+      Deno.env.delete("AUTH_PBKDF2_ITERATIONS");
+    } else {
+      Deno.env.set("AUTH_PBKDF2_ITERATIONS", previousIterations);
+    }
+  }
+});
+
 Deno.test("临时密码账号不能创建、加入或恢复房间", async () => {
   const previousIterations = Deno.env.get("AUTH_PBKDF2_ITERATIONS");
   Deno.env.set("AUTH_PBKDF2_ITERATIONS", "10000");

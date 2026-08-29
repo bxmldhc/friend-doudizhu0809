@@ -79,6 +79,7 @@ fun GomokuEntryScreen(
     state: GameUiState.GomokuEntry,
     onBack: () -> Unit,
     onCreate: (String) -> Unit,
+    onCreateWithAi: (String) -> Unit,
     onJoin: (String, String) -> Unit
 ) {
     var serverUrl by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
@@ -117,7 +118,13 @@ fun GomokuEntryScreen(
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
                 ) {
-                    Text("创建五子棋房间", fontWeight = FontWeight.Bold)
+                    Text("与朋友对弈", fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(
+                    onClick = { onCreateWithAi(serverUrl) },
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    Text("与 AI 练习")
                 }
                 Text("或加入朋友的房间", color = GomokuWax, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -155,6 +162,7 @@ fun GomokuLobbyScreen(
     val clipboard = LocalClipboardManager.current
     val online = state.connection == AppConnectionState.ONLINE
     val players = List(2) { state.players.getOrElse(it) { "等待加入" } }
+    val hasAiOpponent = players.getOrNull(1) == "棋灵"
 
     BoxWithConstraints(Modifier.fillMaxSize().background(GomokuPage).padding(18.dp)) {
         val compact = maxHeight < 440.dp
@@ -173,8 +181,21 @@ fun GomokuLobbyScreen(
                     modifier = Modifier.padding(if (compact) 14.dp else 22.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("等待对手", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                    Text("黑方先行。两位玩家进入后，房主即可开始对局。", color = GomokuMuted, fontSize = 13.sp)
+                    Text(
+                        if (hasAiOpponent) "AI 练习" else "等待对手",
+                        color = Color.White,
+                        fontSize = 25.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (hasAiOpponent) {
+                            "黑方先行。AI 已准备，房主可直接开始对局。"
+                        } else {
+                            "黑方先行。两位玩家进入后，房主即可开始对局。"
+                        },
+                        color = GomokuMuted,
+                        fontSize = 13.sp
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         GomokuLobbySeat(players[0], "黑方", 0, Modifier.weight(1f))
                         GomokuLobbySeat(players[1], "白方", 1, Modifier.weight(1f))
@@ -204,7 +225,7 @@ fun GomokuLobbyScreen(
                     if (state.isHost) {
                         Button(
                             onClick = onStart,
-                            enabled = online && players.all { it != "等待加入" },
+                            enabled = online && (hasAiOpponent || players.all { it != "等待加入" }),
                             modifier = Modifier.fillMaxWidth().height(52.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
                         ) {
@@ -431,6 +452,10 @@ private fun GomokuPlayerPanel(
             Spacer(Modifier.height(8.dp))
             Text(if (isBlack) "黑方" else "白方", color = GomokuWax, fontSize = 12.sp)
             Text(seat?.name?.ifBlank { fallback } ?: fallback, color = Color.White, textAlign = TextAlign.Center)
+            if (seat?.isAi == true) {
+                Spacer(Modifier.height(4.dp))
+                Text("AI 对手", color = GomokuMuted, fontSize = 11.sp)
+            }
             Spacer(Modifier.height(6.dp))
             Text("场分 ${seat?.score ?: 0}", color = GomokuMuted, fontSize = 12.sp)
             if (seat?.isAway == true) {
