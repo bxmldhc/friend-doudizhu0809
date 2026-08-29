@@ -1,6 +1,6 @@
-# 好友斗地主联机服务器
+# 忘忧阁联机服务器
 
-这是“好友斗地主”的 WebSocket 服务端，使用 TypeScript 和 Deno 编写。
+这是“忘忧阁”的 WebSocket 服务端，使用 TypeScript 和 Deno 编写。
 服务器是牌局的唯一裁判，负责房间、发牌、叫抢地主、出牌校验、AI 托管、
 断线处理、场内计分和玩家累计战绩。账号 API 使用昵称和密码登录，
 长期战绩绑定不可变的 `accountId`，昵称只用于登录和展示。
@@ -175,3 +175,94 @@ deno test -A --unstable-kv api_test.ts
 ```bash
 deno check main.ts api_test.ts updates_test.ts
 ```
+
+## 五子棋 WebSocket 协议
+
+未传游戏类型时，服务端默认创建斗地主房间，保持旧客户端兼容。创建五子棋房间时传入：
+
+```json
+{
+  "type": "CREATE",
+  "gameType": "GOMOKU"
+}
+```
+
+也兼容：
+
+```json
+{
+  "type": "CREATE",
+  "game_mode": "gomoku"
+}
+```
+
+`ROOM` 消息会返回服务端确认后的 `gameType`、`game_mode` 和
+`requiredHumans`。五子棋固定为两名真人、`aiCount: 0`，加入请求中的
+`gameType` 不会改变既有房间类型。
+
+两人进入后由房主发送 `START`。服务端使用统一的 `STATE` 消息同步五子棋，
+不要求客户端处理额外的 `GOMOKU_STATE` 消息。`STATE.state` 的五子棋字段为：
+
+```text
+gameType: "GOMOKU"
+game_mode: "gomoku"
+phase: "PLAYING" | "FINISHED"
+boardSize: 15
+board: 15 x 15 number[][]   // 0 空位，1 黑子（0 号座位），2 白子（1 号座位）
+seats: [{ index, name, isHuman, isAway, stone, score }]
+turnIndex: 0 | 1
+winnerIndex: 0 | 1 | null
+winningLine: [{ row, col }]
+moveCount
+gameNumber
+readySeats
+revision
+lastEvent
+```
+
+Android 推荐在用户点击棋盘时只发送坐标：
+
+```json
+{
+  "type": "GOMOKU_MOVE",
+  "row": 7,
+  "col": 7
+}
+```
+
+也兼容通用操作格式：
+
+```json
+{
+  "type": "ACTION",
+  "seat": 0,
+  "action": { "kind": "MOVE", "row": 7, "col": 7 }
+}
+```
+
+服务端校验回合、整数坐标、棋盘范围、空位和五连胜负。合法落子后广播完整
+`STATE`，其中 `lastEvent.type` 为 `GOMOKU_MOVE`，并带有 `seat`、`row`、`col`。
+非法落子仅向操作方发送：
+
+```json
+{
+  "type": "ERROR",
+  "code": "INVALID_ACTION",
+  "message": "..."
+}
+```
+
+断线和恢复沿用已有 `RECONNECT`：
+
+```json
+{
+  "type": "RECONNECT",
+  "room": "123456",
+  "token": "ROOM 返回的 resumeToken",
+  "authToken": "登录会话 token"
+}
+```
+
+对局中断线座位会在 `STATE.state.seats[].isAway` 标记为 `true`；恢复后服务端发送
+完整棋盘状态。五连或和棋后 `phase` 变为 `FINISHED`，双方发送 `READY` 后，房主发送
+`RESTART` 开始下一局。

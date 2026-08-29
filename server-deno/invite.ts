@@ -1,7 +1,7 @@
 import { loadPublishedUpdate } from "./updates.ts";
 
 const ROOM_CODE_PATTERN = /^\d{6}$/;
-const ANDROID_PACKAGE = "com.loves.doudizhu";
+const ANDROID_PACKAGE = "com.loves.wangyouge";
 
 export async function handleInviteRequest(
   req: Request,
@@ -18,10 +18,10 @@ export async function handleInviteRequest(
     });
   }
 
-  const appUrl = `friendddz://join?room=${encodeURIComponent(roomCode)}`;
+  const appUrl = `wangyouge://join?room=${encodeURIComponent(roomCode)}`;
   const intentUrl = [
     `intent://join?room=${encodeURIComponent(roomCode)}#Intent`,
-    "scheme=friendddz",
+    "scheme=wangyouge",
     `package=${ANDROID_PACKAGE}`,
     "action=android.intent.action.VIEW",
     "category=android.intent.category.BROWSABLE",
@@ -81,7 +81,7 @@ function renderInvitePage(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b5d5b">
-  <title>加入好友斗地主房间 ${roomCode}</title>
+  <title>加入忘忧阁房间 ${roomCode}</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -131,7 +131,7 @@ function renderInvitePage(
 </head>
 <body>
   <main>
-    <h1>好友斗地主</h1>
+    <h1>忘忧阁</h1>
     <p>朋友邀请你加入房间</p>
     <strong>${roomCode}</strong>
     <a id="open-app" href="${intentUrl}" role="button">打开应用并加入房间</a>

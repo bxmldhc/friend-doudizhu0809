@@ -27,6 +27,7 @@ const emptyRooms = {
       roomCode: "123456",
       createdAt: 1_700_000_000_000,
       phase: "PLAYING",
+      gameType: "DOUDIZHU",
       gameNumber: 2,
       difficulty: "HARD",
       aiCount: 1,

@@ -1,6 +1,6 @@
 ﻿param(
-    [string]$VersionName = "2.0.1",
-    [int]$VersionCode = 14,
+    [string]$VersionName = "1.0.0",
+    [int]$VersionCode = 1,
     [string[]]$ReleaseNotes = @(
         "新增小游戏站首页",
         "保留斗地主创建房间、加入房间、继续房间和最近战绩入口",
@@ -20,7 +20,7 @@ if ([string]::IsNullOrWhiteSpace($VersionName)) {
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $apkSource = Join-Path $projectRoot "app\build\outputs\apk\release\app-release.apk"
 $releaseDir = Join-Path $projectRoot "server-deno\releases"
-$apkName = "friend-doudizhu-$VersionName.apk"
+$apkName = "wangyouge-$VersionName.apk"
 $apkTarget = Join-Path $releaseDir $apkName
 $manifestTarget = Join-Path $releaseDir "latest.json"
 

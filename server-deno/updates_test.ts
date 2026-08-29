@@ -5,7 +5,7 @@ const SHA256 = "a".repeat(64);
 Deno.test("app update routes publish metadata and APK content", async (t) => {
   const previousDir = Deno.env.get("APP_RELEASES_DIR");
   const releasesDir = await Deno.makeTempDir({ prefix: "friend-ddz-updates-" });
-  const apkName = "friend-doudizhu-1.1.0.apk";
+  const apkName = "wangyouge-1.1.0.apk";
   const apkBytes = new TextEncoder().encode("test apk content");
 
   Deno.env.set("APP_RELEASES_DIR", releasesDir);

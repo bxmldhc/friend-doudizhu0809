@@ -11,7 +11,7 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
       JSON.stringify({
         versionCode: 3,
         versionName: "1.2.0",
-        apkFile: "friend-doudizhu-1.2.0.apk",
+        apkFile: "wangyouge-1.2.0.apk",
         sha256: "a".repeat(64),
         forceUpdate: false,
         releaseNotes: [],
@@ -30,11 +30,11 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
         "text/html",
         "内容类型",
       );
-      assertIncludes(html, "好友斗地主", "页面标题");
+      assertIncludes(html, "忘忧阁", "页面标题");
       assertIncludes(html, "123456", "房号");
       assertIncludes(
         html,
-        "intent://join?room=123456#Intent;scheme=friendddz;package=com.loves.doudizhu",
+        "intent://join?room=123456#Intent;scheme=wangyouge;package=com.loves.wangyouge",
         "Android intent 地址",
       );
       assertIncludes(
@@ -47,7 +47,7 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
         "browser_fallback_url",
         "intent 不应提前刷新页面并打断自定义 scheme 回退",
       );
-      assertIncludes(html, "friendddz://join?room=123456", "备用应用地址");
+      assertIncludes(html, "wangyouge://join?room=123456", "备用应用地址");
       assertIncludes(
         html,
         "window.location.href = intentUrl",
@@ -65,7 +65,7 @@ Deno.test("invite page opens the app and links the latest APK", async (t) => {
       );
       assertIncludes(
         html,
-        "http://games.example:18080/downloads/friend-doudizhu-1.2.0.apk",
+        "http://games.example:18080/downloads/wangyouge-1.2.0.apk",
         "最新安装包地址",
       );
       assertIncludes(html, "正在打开应用", "打开状态提示");

@@ -2,11 +2,15 @@ import { Card, cardNotation, parseCards } from "./cards.ts";
 import { EngineState, Phase, SeatAction, SeatState } from "./engine.ts";
 import { Difficulty } from "./engine.ts";
 import { ComboType } from "./hand.ts";
+import { GomokuState } from "./gomoku.ts";
+
+export type GameType = "DOUDIZHU" | "GOMOKU";
 
 export type RemoteAction =
   | { kind: "CALL"; want: boolean }
   | { kind: "PLAY"; cards: string[] }
-  | { kind: "PASS" };
+  | { kind: "PASS" }
+  | { kind: "MOVE"; row: number; col: number };
 
 export type ClientMessage =
   | {
@@ -15,6 +19,8 @@ export type ClientMessage =
     difficulty: Difficulty;
     aiCount?: number;
     actionTimeoutSeconds?: number;
+    gameType?: string;
+    game_mode?: string;
     playerId?: string;
     authToken?: string;
   }
@@ -22,6 +28,8 @@ export type ClientMessage =
     type: "JOIN";
     room: string;
     name: string;
+    gameType?: string;
+    game_mode?: string;
     playerId?: string;
     authToken?: string;
   }
@@ -33,6 +41,7 @@ export type ClientMessage =
   | { type: "QUICK_MESSAGE"; messageId: string }
   | { type: "LEAVE" }
   | { type: "ACTION"; seat: number; action: RemoteAction }
+  | { type: "GOMOKU_MOVE"; row: number; col: number }
   | { type: "PING" };
 
 export interface RoomLeaderboardEntry {
@@ -67,6 +76,8 @@ export interface ServerGameEvent {
   seat: number | null;
   automatic: boolean;
   at: number;
+  row?: number;
+  col?: number;
   comboType?: ComboType;
   primaryRank?: number;
   comboLength?: number;
@@ -95,6 +106,8 @@ export function serializeState(
   roomContext: RoomStateContext | null = null,
 ): Record<string, unknown> {
   return {
+    gameType: "DOUDIZHU",
+    game_mode: "doudizhu",
     phase: state.phase,
     seats: state.seats.map((s) => ({
       index: s.index,
@@ -197,6 +210,42 @@ export function deserializeState(obj: Record<string, unknown>): EngineState {
     scoreDelta: obj.scoreDelta as number[],
     message: obj.message as string,
     gameNumber: obj.gameNumber as number,
+  };
+}
+
+export function serializeGomokuState(
+  state: GomokuState,
+  names: string[],
+  connectedSeats: boolean[],
+  scores: number[] = [],
+  roomContext: RoomStateContext | null = null,
+): Record<string, unknown> {
+  return {
+    gameType: "GOMOKU",
+    game_mode: "gomoku",
+    phase: state.phase,
+    boardSize: state.board.length,
+    board: state.board,
+    seats: [0, 1].map((index) => ({
+      index,
+      name: names[index],
+      isHuman: true,
+      isAway: !connectedSeats[index],
+      stone: index === 0 ? "BLACK" : "WHITE",
+      score: scores[index] ?? 0,
+    })),
+    turnIndex: state.turnIndex,
+    winnerIndex: state.winnerIndex,
+    winningLine: state.winningLine,
+    moveCount: state.moveCount,
+    message: state.message,
+    gameNumber: state.gameNumber,
+    actionDeadlineAt: null,
+    leaderboard: roomContext?.leaderboard ?? [],
+    roundHistory: roomContext?.roundHistory ?? [],
+    readySeats: (roomContext?.readySeats ?? [false, false]).slice(0, 2),
+    revision: roomContext?.revision ?? 0,
+    lastEvent: roomContext?.lastEvent ?? null,
   };
 }
 

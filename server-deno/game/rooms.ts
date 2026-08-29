@@ -1,9 +1,11 @@
 import { Difficulty, DoudizhuEngine, EngineState } from "./engine.ts";
 import { AiAction, decide } from "./ai.ts";
 import {
+  GameType,
   RemoteAction,
   RoomLeaderboardEntry,
   RoomRoundSummary,
+  serializeGomokuState,
   serializeState,
   ServerGameEvent,
 } from "./protocol.ts";
@@ -11,6 +13,7 @@ import { recordGame } from "./store.ts";
 import { parseCards } from "./cards.ts";
 import { resolveSession } from "./auth.ts";
 import { Pattern } from "./hand.ts";
+import { GomokuEngine } from "./gomoku.ts";
 
 interface Room {
   code: string;
@@ -28,6 +31,8 @@ interface Room {
   lastRecordedGameNumber: number;
   readySeats: boolean[];
   engine: DoudizhuEngine | null;
+  gomoku: GomokuEngine | null;
+  gameType: GameType;
   difficulty: Difficulty;
   aiCount: number;
   actionTimeoutMs: number;
@@ -62,6 +67,7 @@ export interface AdminRoomSnapshot {
   roomCode: string;
   createdAt: number;
   phase: "WAITING" | "BIDDING" | "PLAYING" | "FINISHED";
+  gameType: GameType;
   gameNumber: number;
   difficulty: Difficulty;
   aiCount: number;
@@ -138,7 +144,9 @@ export class RoomManager {
     requestedPlayerId = "",
     isAuthenticated = false,
     requestedActionTimeoutSeconds = DEFAULT_ACTION_TIMEOUT_SECONDS,
+    requestedGameType: GameType = "DOUDIZHU",
   ): string {
+    const gameType = requestedGameType;
     const aiCount = Math.max(
       0,
       Math.min(
@@ -150,7 +158,7 @@ export class RoomManager {
     do {
       code = String(Math.floor(100000 + Math.random() * 900000));
     } while (this.rooms.has(code));
-    const requiredHumans = 3 - aiCount;
+    const requiredHumans = gameType === "GOMOKU" ? 2 : 3 - aiCount;
     const host = this.createParticipant(
       name,
       false,
@@ -160,11 +168,13 @@ export class RoomManager {
     const participants = new Map<string, RoomParticipant>([[host.id, host]]);
     const playerIds: (string | null)[] = [host.id, null, null];
     const names = [name, "等待加入", "等待加入"];
-    for (let seat = requiredHumans; seat < 3; seat++) {
-      const ai = this.createParticipant(AI_NAMES[seat], true);
-      participants.set(ai.id, ai);
-      playerIds[seat] = ai.id;
-      names[seat] = ai.name;
+    if (gameType === "DOUDIZHU") {
+      for (let seat = requiredHumans; seat < 3; seat++) {
+        const ai = this.createParticipant(AI_NAMES[seat], true);
+        participants.set(ai.id, ai);
+        playerIds[seat] = ai.id;
+        names[seat] = ai.name;
+      }
     }
     const createdAt = Date.now();
     const actionTimeoutSeconds = ALLOWED_ACTION_TIMEOUT_SECONDS.has(
@@ -186,10 +196,14 @@ export class RoomManager {
       participants,
       roundHistory: [],
       lastRecordedGameNumber: 0,
-      readySeats: [0, 1, 2].map((seat) => seat >= requiredHumans),
+      readySeats: [0, 1, 2].map((seat) =>
+        gameType === "GOMOKU" ? false : seat >= requiredHumans
+      ),
       engine: null,
+      gomoku: null,
+      gameType,
       difficulty,
-      aiCount,
+      aiCount: gameType === "GOMOKU" ? 0 : aiCount,
       actionTimeoutMs: actionTimeoutSeconds * 1_000,
       quickMessageAt: [0, 0, 0],
       aiRunning: false,
@@ -216,22 +230,24 @@ export class RoomManager {
     if (!room) {
       return { ok: false, code: "ROOM_NOT_FOUND", message: "房间不存在" };
     }
-    if (room.engine && room.engine.state.phase !== "FINISHED") {
+    if (this.isRoundInProgress(room)) {
       return {
         ok: false,
         code: "GAME_ALREADY_STARTED",
         message: "游戏已经开始，不能加入",
       };
     }
-    const humanCount = room.sockets.filter((s) => s !== null).length;
-    if (humanCount >= 3 - room.aiCount) {
+    const humanCount = room.sockets
+      .slice(0, this.requiredHumans(room))
+      .filter((s) => s !== null).length;
+    if (humanCount >= this.requiredHumans(room)) {
       return {
         ok: false,
         code: "ROOM_FULL",
         message: "当前房间真人人数已满",
       };
     }
-    const requiredHumans = 3 - room.aiCount;
+    const requiredHumans = this.requiredHumans(room);
     const seat = room.sockets.findIndex((s, i) =>
       i < requiredHumans && s === null
     );
@@ -270,6 +286,8 @@ export class RoomManager {
     if (room.engine) {
       this.syncSeatIdentity(room);
       this.publishState(room);
+    } else if (room.gomoku) {
+      this.broadcastState(room);
     }
     return { ok: true };
   }
@@ -319,7 +337,7 @@ export class RoomManager {
     room.sockets[seat] = ws;
     this.touchRoom(room);
     this.socketRoom.set(ws, code);
-    if (room.engine?.state.phase === "FINISHED") {
+    if (this.isRoundFinished(room)) {
       room.readySeats[seat] = false;
     }
     if (room.engine) {
@@ -336,6 +354,8 @@ export class RoomManager {
       } else {
         this.broadcastState(room);
       }
+    } else if (room.gomoku) {
+      this.broadcastState(room);
     } else {
       this.broadcastPlayers(room);
     }
@@ -353,6 +373,14 @@ export class RoomManager {
       return;
     }
     if (!this.validateStartPlayers(room, ws)) return;
+    if (room.gameType === "GOMOKU") {
+      if (!room.gomoku) room.gomoku = new GomokuEngine();
+      room.gomoku.startNewGame();
+      this.touchRoom(room);
+      this.markEvent(room, "ROUND_STARTED", null, false);
+      this.publishState(room);
+      return;
+    }
     if (!room.engine) {
       room.engine = new DoudizhuEngine({
         humanCount: 3 - room.aiCount,
@@ -368,7 +396,7 @@ export class RoomManager {
 
   restart(ws: WebSocket) {
     const room = this.getRoomBySocket(ws);
-    if (!room || !room.engine) {
+    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
       sendError(ws, "INVALID_ACTION", "当前房间没有可重开的牌局");
       return;
     }
@@ -376,7 +404,7 @@ export class RoomManager {
       sendError(ws, "NOT_HOST", "只有房主可以重开");
       return;
     }
-    if (room.engine.state.phase !== "FINISHED") {
+    if (!this.isRoundFinished(room)) {
       sendError(ws, "INVALID_ACTION", "当前牌局尚未结束");
       return;
     }
@@ -393,21 +421,25 @@ export class RoomManager {
       sendError(ws, "NOT_READY", "请等待所有玩家准备");
       return;
     }
-    room.engine.startNewGame();
+    if (room.gameType === "GOMOKU") {
+      room.gomoku!.startNewGame();
+    } else {
+      room.engine!.startNewGame();
+    }
     this.touchRoom(room);
     this.markEvent(room, "ROUND_STARTED", null, false);
     this.resetReadySeats(room);
-    this.syncSeatIdentity(room);
+    if (room.engine) this.syncSeatIdentity(room);
     this.publishState(room);
   }
 
   setReady(ws: WebSocket, ready: boolean) {
     const room = this.getRoomBySocket(ws);
-    if (!room || !room.engine) {
+    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
       sendError(ws, "INVALID_ACTION", "当前房间没有可准备的牌局");
       return;
     }
-    if (room.engine.state.phase !== "FINISHED") {
+    if (!this.isRoundFinished(room)) {
       sendError(ws, "INVALID_ACTION", "只有本局结束后才能准备");
       return;
     }
@@ -428,7 +460,7 @@ export class RoomManager {
       sendError(ws, "NOT_HOST", "只有房主可以解散房间");
       return;
     }
-    if (room.engine && room.engine.state.phase !== "FINISHED") {
+    if (this.isRoundInProgress(room)) {
       sendError(ws, "GAME_IN_PROGRESS", "牌局进行中不能解散房间");
       return;
     }
@@ -486,7 +518,7 @@ export class RoomManager {
 
   action(ws: WebSocket, seat: number, action: RemoteAction) {
     const room = this.getRoomBySocket(ws);
-    if (!room || !room.engine) {
+    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
       sendError(ws, "INVALID_ACTION", "当前房间没有进行中的牌局");
       return;
     }
@@ -494,8 +526,19 @@ export class RoomManager {
       sendError(ws, "INVALID_ACTION", "不能操作其他玩家的座位");
       return;
     }
-    if (room.engine.state.turnIndex !== seat) {
+    const turnIndex = room.gameType === "GOMOKU"
+      ? room.gomoku!.state.turnIndex
+      : room.engine!.state.turnIndex;
+    if (turnIndex !== seat) {
       sendError(ws, "INVALID_ACTION", "当前还没有轮到你操作");
+      return;
+    }
+    if (room.gameType === "GOMOKU") {
+      if (action.kind !== "MOVE") {
+        sendError(ws, "INVALID_ACTION", "Gomoku only accepts MOVE actions");
+        return;
+      }
+      this.applyGomokuMove(room, seat, action.row, action.col);
       return;
     }
     this.applyAction(room, seat, action);
@@ -565,10 +608,12 @@ export class RoomManager {
       if (hostChanged) {
         room.hostSeat = this.pickNewHost(room);
       }
-      if (room.engine && room.engine.state.phase !== "FINISHED") {
-        room.engine.setSeatHuman(seat, false);
-        room.engine.setSeatAway(seat, true);
-        // Keep the active seat and nickname visible while the server AI takes over.
+      if (this.isRoundInProgress(room)) {
+        if (room.engine) {
+          room.engine.setSeatHuman(seat, false);
+          room.engine.setSeatAway(seat, true);
+        }
+        // Active game seats retain their identity and resume token.
       } else {
         room.names[seat] = "等待加入";
         room.resumeTokens[seat] = null;
@@ -583,11 +628,11 @@ export class RoomManager {
         return;
       }
       if (
-        hostChanged || !room.engine || room.engine.state.phase === "FINISHED"
+        hostChanged || !this.isRoundInProgress(room)
       ) {
         this.broadcastPlayers(room);
       }
-      if (room.engine) this.publishState(room);
+      if (room.engine || room.gomoku) this.publishState(room);
     }
   }
 
@@ -622,6 +667,7 @@ export class RoomManager {
           Number(
             msg.actionTimeoutSeconds ?? DEFAULT_ACTION_TIMEOUT_SECONDS,
           ),
+          this.resolveGameType(msg),
         );
         this.bindSocketIdentity(
           ws,
@@ -723,6 +769,17 @@ export class RoomManager {
         if (!await this.requireSocketIdentity(ws)) break;
         this.action(ws, Number(msg.seat), msg.action as RemoteAction);
         break;
+      case "GOMOKU_MOVE": {
+        if (!await this.requireSocketIdentity(ws)) break;
+        const room = this.getRoomBySocket(ws);
+        const seat = room?.sockets.findIndex((socket) => socket === ws) ?? -1;
+        this.action(ws, seat, {
+          kind: "MOVE",
+          row: Number(msg.row),
+          col: Number(msg.col),
+        });
+        break;
+      }
       case "PING":
         send(ws, { type: "PONG" });
         break;
@@ -758,6 +815,15 @@ export class RoomManager {
       isAuthenticated: false,
       mustChangePassword: false,
     };
+  }
+
+  private resolveGameType(message: Record<string, unknown>): GameType {
+    const value = String(message.gameType ?? message.game_mode ?? "")
+      .trim()
+      .toUpperCase();
+    return value === "GOMOKU" || value === "WUZIQI" || value === "FIVE_IN_A_ROW"
+      ? "GOMOKU"
+      : "DOUDIZHU";
   }
 
   private async resolveAuthenticatedMessageIdentity(
@@ -816,7 +882,7 @@ export class RoomManager {
   }
 
   private hasOpenHumanConnection(room: Room): boolean {
-    const requiredHumans = 3 - room.aiCount;
+    const requiredHumans = this.requiredHumans(room);
     return room.sockets
       .slice(0, requiredHumans)
       .some((socket) => socket?.readyState === WebSocket.OPEN);
@@ -827,11 +893,13 @@ export class RoomManager {
       type: "ROOM",
       room: room.code,
       yourSeat: seat,
-      players: room.names,
+      players: room.names.slice(0, this.requiredHumans(room)),
       hostSeat: room.hostSeat,
       resumeToken: room.resumeTokens[seat],
       aiCount: room.aiCount,
-      requiredHumans: 3 - room.aiCount,
+      requiredHumans: this.requiredHumans(room),
+      gameType: room.gameType,
+      game_mode: room.gameType === "GOMOKU" ? "gomoku" : "doudizhu",
       difficulty: room.difficulty,
       actionTimeoutSeconds: room.actionTimeoutMs / 1_000,
     });
@@ -844,6 +912,35 @@ export class RoomManager {
   }
 
   private broadcastState(room: Room) {
+    if (room.gomoku) {
+      const connectedSeats = room.sockets
+        .slice(0, this.requiredHumans(room))
+        .map((socket) => socket !== null);
+      const scores = room.playerIds.slice(0, this.requiredHumans(room)).map(
+        (playerId) => playerId ? room.participants.get(playerId)?.score ?? 0 : 0,
+      );
+      room.sockets.slice(0, this.requiredHumans(room)).forEach((ws) => {
+        if (ws) {
+          send(ws, {
+            type: "STATE",
+            state: serializeGomokuState(
+              room.gomoku!.state,
+              room.names,
+              connectedSeats,
+              scores,
+              {
+                leaderboard: this.buildLeaderboard(room),
+                roundHistory: room.roundHistory,
+                readySeats: room.readySeats,
+                revision: room.revision,
+                lastEvent: room.lastEvent,
+              },
+            ),
+          });
+        }
+      });
+      return;
+    }
     if (!room.engine) return;
     room.sockets.forEach((ws, seat) => {
       if (ws) {
@@ -895,6 +992,34 @@ export class RoomManager {
     }
   }
 
+  private applyGomokuMove(
+    room: Room,
+    seat: number,
+    row: number,
+    col: number,
+  ) {
+    const gomoku = room.gomoku;
+    if (!gomoku) return;
+    try {
+      gomoku.submitMove(seat, row, col);
+      this.touchRoom(room);
+      this.markEvent(room, "GOMOKU_MOVE", seat, false, undefined, row, col);
+      if (gomoku.state.phase === "FINISHED") {
+        this.recordFinishedGomokuRound(room);
+      }
+      this.publishState(room);
+    } catch (err) {
+      const ws = room.sockets[seat];
+      if (ws) {
+        sendError(
+          ws,
+          "INVALID_ACTION",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+  }
+
   private afterEngineChange(room: Room) {
     if (room.engine?.state.phase === "FINISHED") {
       this.recordFinishedRound(room);
@@ -906,6 +1031,10 @@ export class RoomManager {
 
   private publishState(room: Room) {
     this.cancelTurnTimer(room);
+    if (room.gomoku) {
+      this.broadcastState(room);
+      return;
+    }
     const engine = room.engine;
     if (!engine) return;
     if (engine.state.phase !== "FINISHED" && engine.isHumanTurn()) {
@@ -1015,7 +1144,7 @@ export class RoomManager {
   private syncSeatIdentity(room: Room) {
     const engine = room.engine;
     if (!engine) return;
-    const requiredHumans = 3 - room.aiCount;
+    const requiredHumans = this.requiredHumans(room);
     engine.state = {
       ...engine.state,
       seats: engine.state.seats.map((seat, index) => {
@@ -1041,6 +1170,7 @@ export class RoomManager {
   ): string {
     if (action.kind === "PLAY") return "PLAY";
     if (action.kind === "PASS") return "PASS";
+    if (action.kind === "MOVE") return "GOMOKU_MOVE";
     if (!action.want) {
       return state.bidCandidateIndex === null ? "NOT_CALL" : "NOT_ROB";
     }
@@ -1053,14 +1183,19 @@ export class RoomManager {
     seat: number | null,
     automatic: boolean,
     playPattern?: Pattern,
+    row?: number,
+    col?: number,
   ) {
     room.revision += 1;
     room.lastEvent = {
-      id: `${room.code}:${room.engine?.state.gameNumber ?? 0}:${room.revision}`,
+      id: `${room.code}:${this.gameNumber(room)}:${room.revision}`,
       type,
       seat,
       automatic,
       at: Date.now(),
+      ...(typeof row === "number" && typeof col === "number"
+        ? { row, col }
+        : {}),
       ...(type === "PLAY" && playPattern
         ? {
           comboType: playPattern.type,
@@ -1096,6 +1231,7 @@ export class RoomManager {
 
   private pickNewHost(room: Room): number {
     const candidates = room.sockets
+      .slice(0, this.requiredHumans(room))
       .map((socket, seat) => socket ? seat : -1)
       .filter((seat) => seat >= 0);
     if (candidates.length === 0) return -1;
@@ -1103,8 +1239,10 @@ export class RoomManager {
   }
 
   private validateStartPlayers(room: Room, ws: WebSocket): boolean {
-    const humanCount = room.sockets.filter((socket) => socket !== null).length;
-    const requiredHumans = 3 - room.aiCount;
+    const requiredHumans = this.requiredHumans(room);
+    const humanCount = room.sockets
+      .slice(0, requiredHumans)
+      .filter((socket) => socket !== null).length;
     if (humanCount < requiredHumans) {
       sendError(
         ws,
@@ -1143,8 +1281,10 @@ export class RoomManager {
   }
 
   private toAdminRoomSnapshot(room: Room): AdminRoomSnapshot {
-    const requiredHumans = 3 - room.aiCount;
-    const seats = [0, 1, 2].map((seat): AdminRoomSeatSnapshot => {
+    const requiredHumans = this.requiredHumans(room);
+    const seats = Array.from(
+      { length: requiredHumans },
+      (_, seat): AdminRoomSeatSnapshot => {
       const playerId = room.playerIds[seat];
       const participant = playerId ? room.participants.get(playerId) : null;
       const isAi = participant?.isAi === true;
@@ -1155,17 +1295,18 @@ export class RoomManager {
         isAi,
         isConnected,
         isAway: Boolean(
-          participant && !isAi && room.engine &&
-            room.engine.state.phase !== "FINISHED" && !isConnected,
+          participant && !isAi && this.isRoundInProgress(room) && !isConnected,
         ),
         isHost: seat === room.hostSeat,
       };
-    });
+      },
+    );
     return {
       roomCode: room.code,
       createdAt: room.startedAt,
-      phase: room.engine?.state.phase ?? "WAITING",
-      gameNumber: room.engine?.state.gameNumber ?? 0,
+      phase: this.phase(room),
+      gameType: room.gameType,
+      gameNumber: this.gameNumber(room),
       difficulty: room.difficulty,
       aiCount: room.aiCount,
       actionTimeoutSeconds: room.actionTimeoutMs / 1_000,
@@ -1246,6 +1387,40 @@ export class RoomManager {
     }
   }
 
+  private recordFinishedGomokuRound(room: Room) {
+    const state = room.gomoku?.state;
+    if (!state || room.lastRecordedGameNumber === state.gameNumber) return;
+    room.lastRecordedGameNumber = state.gameNumber;
+
+    const scores = [0, 1].flatMap((seat) => {
+      const playerId = room.playerIds[seat];
+      if (!playerId) return [];
+      const participant = room.participants.get(playerId);
+      if (!participant) return [];
+      const delta = state.winnerIndex === null
+        ? 0
+        : state.winnerIndex === seat ? 1 : -1;
+      participant.score += delta;
+      return [{
+        playerId,
+        name: participant.name,
+        delta,
+        totalScore: participant.score,
+        isAi: false,
+      }];
+    });
+    room.roundHistory.push({
+      gameNumber: state.gameNumber,
+      winnerPlayerId: state.winnerIndex === null
+        ? null
+        : room.playerIds[state.winnerIndex],
+      landlordPlayerId: null,
+      multiplier: 1,
+      scores,
+    });
+    this.resetReadySeats(room);
+  }
+
   private destroyRoom(room: Room) {
     this.cancelTurnTimer(room);
     for (const socket of room.sockets) {
@@ -1259,6 +1434,7 @@ export class RoomManager {
 
   private resetReadySeats(room: Room) {
     room.readySeats = [0, 1, 2].map((seat) => {
+      if (seat >= this.requiredHumans(room)) return true;
       const participant = room.playerIds[seat]
         ? room.participants.get(room.playerIds[seat]!)
         : null;
@@ -1267,5 +1443,29 @@ export class RoomManager {
       }
       return false;
     });
+  }
+
+  private requiredHumans(room: Room): number {
+    return room.gameType === "GOMOKU" ? 2 : 3 - room.aiCount;
+  }
+
+  private isRoundInProgress(room: Room): boolean {
+    return room.gameType === "GOMOKU"
+      ? room.gomoku !== null && room.gomoku.state.phase === "PLAYING"
+      : room.engine !== null && room.engine.state.phase !== "FINISHED";
+  }
+
+  private isRoundFinished(room: Room): boolean {
+    return room.gameType === "GOMOKU"
+      ? room.gomoku?.state.phase === "FINISHED"
+      : room.engine?.state.phase === "FINISHED";
+  }
+
+  private gameNumber(room: Room): number {
+    return room.gomoku?.state.gameNumber ?? room.engine?.state.gameNumber ?? 0;
+  }
+
+  private phase(room: Room): AdminRoomSnapshot["phase"] {
+    return room.gomoku?.state.phase ?? room.engine?.state.phase ?? "WAITING";
   }
 }

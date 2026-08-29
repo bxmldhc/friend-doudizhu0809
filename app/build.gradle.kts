@@ -7,7 +7,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val asciiTestClassesDir = File(System.getProperty("java.io.tmpdir"), "doudizhu-test-classes")
+val asciiTestClassesDir = File(System.getProperty("java.io.tmpdir"), "wangyouge-test-classes")
 val signingPropertiesFile = rootProject.file("app/signing.properties")
 val signingProperties = Properties().apply {
     if (signingPropertiesFile.isFile) {
@@ -33,15 +33,15 @@ val prepareAsciiTestClasses by tasks.registering {
 }
 
 android {
-    namespace = "com.loves.doudizhu"
+    namespace = "com.loves.wangyouge"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.loves.doudizhu"
+        applicationId = "com.loves.wangyouge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "2.0.1"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
