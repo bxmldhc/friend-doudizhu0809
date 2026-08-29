@@ -1,11 +1,10 @@
 ﻿param(
-    [string]$VersionName = "2.0.0",
-    [int]$VersionCode = 13,
+    [string]$VersionName = "2.0.1",
+    [int]$VersionCode = 14,
     [string[]]$ReleaseNotes = @(
-        "三人都不叫地主时自动重新洗牌发牌",
-        "新增地主与农民分阵营胜率",
-        "大幅优化困难 AI 的叫抢、农民配合和残局策略",
-        "优化 AI 对顺子、连对和飞机等牌型结构的保护"
+        "新增小游戏站首页",
+        "保留斗地主创建房间、加入房间、继续房间和最近战绩入口",
+        "优化首页横屏布局与快捷入口滚动"
     ),
     [switch]$ForceUpdate
 )

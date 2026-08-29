@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,13 +27,20 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Games
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ManageAccounts
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -106,142 +114,192 @@ fun HomeScreen(
     onCheckUpdate: () -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().background(PageBg)) {
-        val compactHeight = maxHeight < 500.dp
-        val pagePadding = if (compactHeight) 12.dp else 24.dp
-        val sectionGap = if (compactHeight) 12.dp else 24.dp
+        val compact = maxHeight < 500.dp || maxWidth < 900.dp
+        val pagePadding = if (compact) 12.dp else 22.dp
+        val sectionGap = if (compact) 10.dp else 16.dp
 
         Row(
-            modifier = Modifier.fillMaxSize().padding(pagePadding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(pagePadding),
             horizontalArrangement = Arrangement.spacedBy(sectionGap)
         ) {
             Column(
                 modifier = Modifier
-                    .weight(0.9f)
+                    .weight(if (compact) 0.72f else 0.8f)
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("好友斗地主", color = Wax, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text("小游戏站", color = Wax, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = "三个人，马上开一局。",
+                    text = "和朋友，随时开一局。",
                     color = Color.White,
-                    fontSize = if (compactHeight) 34.sp else 42.sp,
-                    lineHeight = if (compactHeight) 38.sp else 46.sp,
+                    fontSize = if (compact) 28.sp else 36.sp,
+                    lineHeight = if (compact) 32.sp else 40.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(Modifier.height(if (compactHeight) 6.dp else 10.dp))
                 Text(
-                    text = "创建六位房号，选择 AI 数量，再发给朋友加入。",
+                    text = "熟人朋友的小型游戏空间",
                     color = Muted,
-                    fontSize = if (compactHeight) 14.sp else 16.sp
+                    fontSize = if (compact) 13.sp else 15.sp
                 )
-                Spacer(Modifier.height(if (compactHeight) 12.dp else 24.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = onCreate,
-                        modifier = Modifier.height(52.dp),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                            containerColor = Coral
+                HomeInfoRow(
+                    icon = { Icon(Icons.Default.AccountCircle, null, tint = Wax) },
+                    title = state.nickname.ifBlank { "未登录" },
+                    subtitle = "当前账号"
+                )
+                HomeInfoRow(
+                    icon = {
+                        Icon(
+                            if (state.connection == AppConnectionState.OFFLINE) Icons.Default.WifiOff else Icons.Default.Wifi,
+                            null,
+                            tint = connectionColor(state.connection)
                         )
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("创建房间", fontWeight = FontWeight.Bold)
-                    }
-                    OutlinedButton(onClick = onJoin, modifier = Modifier.height(52.dp)) {
-                        Text("加入房间", fontWeight = FontWeight.Bold)
-                    }
-                }
-                state.resumeRoomCode?.let { room ->
-                    Spacer(Modifier.height(if (compactHeight) 8.dp else 12.dp))
-                    Column {
-                        Button(
-                            onClick = onResume,
-                            modifier = Modifier.height(50.dp),
-                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                containerColor = Wax,
-                                contentColor = PageBg
-                            )
-                        ) {
-                            Icon(Icons.Default.Restore, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("恢复房间 $room", fontWeight = FontWeight.Bold)
-                        }
-                        state.resumeSavedAt?.let { savedAt ->
-                            Spacer(Modifier.height(5.dp))
-                            Text(
-                                text = resumeTimeDescription(savedAt),
-                                color = Muted,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(if (compactHeight) 10.dp else 20.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ConnectionDot(state.connection)
-                    Spacer(Modifier.width(8.dp))
-                    Text(connectionText(state.connection), color = Muted, fontSize = 13.sp)
-                    Spacer(Modifier.width(16.dp))
-                    Icon(Icons.Default.Person, contentDescription = null, tint = Muted)
-                    Spacer(Modifier.width(5.dp))
-                    Text(state.nickname, color = Color.White, fontSize = 13.sp)
+                    },
+                    title = connectionText(state.connection),
+                    subtitle = "服务器连接状态"
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("快捷入口", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                HomeCompactAction(
+                    icon = { Icon(Icons.Default.History, null, tint = Color.White) },
+                    title = "最近战绩",
+                    subtitle = "查看最近十场记录",
+                    onClick = onHistory
+                )
+                HomeCompactAction(
+                    icon = { Icon(Icons.Default.ManageAccounts, null, tint = Color.White) },
+                    title = "账号设置",
+                    subtitle = "账号与登录信息",
+                    onClick = onAccount
+                )
+                HomeCompactAction(
+                    icon = {
+                        Icon(
+                            if (state.voiceEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                            null,
+                            tint = if (state.voiceEnabled) Wax else Muted
+                        )
+                    },
+                    title = if (state.voiceEnabled) "游戏语音已开" else "游戏语音已关",
+                    subtitle = "点击切换",
+                    onClick = { onVoiceEnabledChange(!state.voiceEnabled) }
+                )
+                if (state.isAdmin) {
+                    HomeCompactAction(
+                        icon = { Icon(Icons.Default.AdminPanelSettings, null, tint = Wax) },
+                        title = "超级管理入口",
+                        subtitle = "账号与房间管理",
+                        onClick = onAdmin
+                    )
                 }
             }
             Surface(
-                modifier = Modifier.weight(1.1f).fillMaxSize(),
-                color = Color(0xFF1B4A4C),
+                modifier = Modifier.weight(if (compact) 1.65f else 1.75f).fillMaxSize(),
+                color = Color(0xFF123F43),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Box(Modifier.fillMaxSize()) {
-                    Image(
-                        painter = painterResource(R.drawable.table_table_felt),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    Surface(
-                        modifier = Modifier.align(Alignment.TopStart).padding(if (compactHeight) 10.dp else 18.dp),
-                        color = Color(0xDD102F37),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = "熟人局 · 服务器裁判",
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            fontSize = 12.sp
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(if (compact) 14.dp else 22.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = Coral, shape = RoundedCornerShape(8.dp)) {
+                            Icon(
+                                Icons.Default.Games,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.padding(10.dp).size(24.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("游戏大厅", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("选择一个游戏开始", color = Muted, fontSize = 12.sp)
+                        }
+                    }
+                    Surface(color = Color(0xFF1A6259), shape = RoundedCornerShape(8.dp)) {
+                        Column(
+                            modifier = Modifier.padding(if (compact) 14.dp else 20.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("好友斗地主", color = Wax, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "三个人，马上开一局。",
+                                        color = Color.White,
+                                        fontSize = if (compact) 24.sp else 30.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text("服务器裁判 · 支持朋友房间和 AI 补位", color = Color(0xFFD4E8E4), fontSize = 12.sp)
+                                }
+                                Image(
+                                    painter = painterResource(R.drawable.brand_landlord_badge),
+                                    contentDescription = "斗地主",
+                                    modifier = Modifier.size(if (compact) 54.dp else 72.dp)
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Button(
+                                    onClick = onCreate,
+                                    modifier = Modifier.height(50.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("创建房间", fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(onClick = onJoin, modifier = Modifier.height(50.dp)) {
+                                    Icon(Icons.Default.Link, null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("加入房间", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            state.resumeRoomCode?.let { room ->
+                                OutlinedButton(
+                                    onClick = onResume,
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Wax)
+                                ) {
+                                    Icon(Icons.Default.Restore, null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("继续房间 $room", fontWeight = FontWeight.Bold)
+                                    state.resumeSavedAt?.let {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("· ${resumeTimeDescription(it)}", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        HomeGamePlaceholder(
+                            modifier = Modifier.weight(1f),
+                            icon = { Icon(Icons.Default.Extension, null, tint = Muted) },
+                            title = "五子棋",
+                            subtitle = "即将加入"
+                        )
+                        HomeGamePlaceholder(
+                            modifier = Modifier.weight(1f),
+                            icon = { Icon(Icons.Default.Games, null, tint = Muted) },
+                            title = "更多小游戏",
+                            subtitle = "即将加入"
                         )
                     }
-                    Image(
-                        painter = painterResource(R.drawable.brand_landlord_badge),
-                        contentDescription = "地主标记",
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(if (compactHeight) 60.dp else 76.dp)
-                    )
                 }
             }
             LazyColumn(
                 modifier = Modifier
-                    .width(60.dp)
+                    .width(if (compact) 68.dp else 88.dp)
                     .fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (state.isAdmin) {
-                    item {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            IconButton(onClick = onAdmin, modifier = Modifier.size(48.dp)) {
-                                Icon(
-                                    Icons.Default.AdminPanelSettings,
-                                    contentDescription = "超级管理入口",
-                                    tint = Wax
-                                )
-                            }
-                            Text("管理", color = Muted, fontSize = 11.sp)
-                        }
-                    }
-                }
                 item {
                     HomeNavigationItem(
                         label = "战绩",
@@ -252,39 +310,93 @@ fun HomeScreen(
                 }
                 item {
                     HomeNavigationItem(
-                        label = "更新",
+                        label = "检查更新",
                         onClick = onCheckUpdate
                     ) {
                         Icon(Icons.Default.SystemUpdate, contentDescription = "检查更新", tint = Color.White)
                     }
                 }
-                item {
-                    HomeNavigationItem(
-                        label = if (state.voiceEnabled) "语音开" else "语音关",
-                        onClick = { onVoiceEnabledChange(!state.voiceEnabled) }
-                    ) {
-                        Icon(
-                            imageVector = if (state.voiceEnabled) {
-                                Icons.AutoMirrored.Filled.VolumeUp
-                            } else {
-                                Icons.AutoMirrored.Filled.VolumeOff
-                            },
-                            contentDescription = if (state.voiceEnabled) "关闭语音" else "开启语音",
-                            tint = if (state.voiceEnabled) Wax else Muted
-                        )
-                    }
-                }
-                item {
-                    HomeNavigationItem(
-                        label = "账号",
-                        onClick = onAccount
-                    ) {
-                        Icon(Icons.Default.ManageAccounts, contentDescription = "账号管理", tint = Color.White)
-                    }
-                }
             }
         }
     }
+}
+
+@Composable
+private fun HomeInfoRow(
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(color = SurfaceBg, shape = RoundedCornerShape(8.dp)) {
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { icon() }
+        }
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = Muted, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun HomeCompactAction(
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color(0xFF102E36),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon() }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, color = Muted, fontSize = 10.sp)
+            }
+            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+        }
+    }
+}
+
+@Composable
+private fun HomeGamePlaceholder(
+    modifier: Modifier,
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String
+) {
+    Surface(
+        modifier = modifier.heightIn(min = 76.dp),
+        color = SurfaceBg,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) { icon() }
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, color = Muted, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+private fun connectionColor(connection: AppConnectionState): Color = when (connection) {
+    AppConnectionState.ONLINE -> Color(0xFF7ED9A3)
+    AppConnectionState.RECONNECTING, AppConnectionState.CONNECTING -> Wax
+    AppConnectionState.OFFLINE -> Color(0xFFE97870)
 }
 
 @Composable
