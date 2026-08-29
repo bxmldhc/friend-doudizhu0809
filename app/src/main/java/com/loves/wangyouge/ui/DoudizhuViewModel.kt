@@ -22,6 +22,8 @@ import com.loves.wangyouge.network.ApiResult
 import com.loves.wangyouge.network.AuthApi
 import com.loves.wangyouge.network.AuthSession
 import com.loves.wangyouge.network.ConnectionState
+import com.loves.wangyouge.network.FriendProfile
+import com.loves.wangyouge.network.FriendRequest
 import com.loves.wangyouge.network.InviteLink
 import com.loves.wangyouge.network.OnlineClient
 import com.loves.wangyouge.network.PublicPlayerStats
@@ -171,6 +173,16 @@ sealed interface GameUiState {
         val error: String? = null
     ) : GameUiState
 
+    data class Friends(
+        val friends: List<FriendProfile> = emptyList(),
+        val requests: List<FriendRequest> = emptyList(),
+        val searchResults: List<FriendProfile> = emptyList(),
+        val query: String = "",
+        val loading: Boolean = true,
+        val error: String? = null,
+        val actionInFlight: Boolean = false
+    ) : GameUiState
+
     data class Account(
         val accountId: String,
         val nickname: String,
@@ -185,6 +197,9 @@ sealed interface GameUiState {
         val accounts: List<AdminAccount> = emptyList(),
         val rooms: List<AdminRoom> = emptyList(),
         val onlineAccounts: List<AdminOnlineAccount> = emptyList(),
+        val appOnlineAccounts: List<AdminOnlineAccount> = emptyList(),
+        val appOnlineCount: Int = 0,
+        val roomOnlineCount: Int = 0,
         val auditRecords: List<AdminAuditRecord> = emptyList(),
         val registrationEnabled: Boolean = true,
         val loading: Boolean = true,
@@ -249,6 +264,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private var voiceEnabled = preferences.getBoolean("voiceEnabled", true)
     private var updateChecked = false
     private var reconnectJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var quickMessageJob: Job? = null
     private var reconnectAttempt = 0
     private var allowAutomaticReconnect = true
@@ -419,6 +435,78 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     fun openHistory() {
         _uiState.value = GameUiState.History()
         loadHistory()
+    }
+
+    fun openFriends() {
+        _uiState.value = GameUiState.Friends()
+        loadFriends()
+    }
+
+    fun refreshFriends() {
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(loading = true, error = null)
+        loadFriends(current.query)
+    }
+
+    fun searchFriends(query: String) {
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(query = query, loading = true, error = null)
+        val session = authSession ?: return showAuth()
+        viewModelScope.launch {
+            when (val result = authApi.searchFriends(
+                httpBaseUrl(lastServerUrl),
+                session.authToken,
+                query
+            )) {
+                is ApiResult.Success -> {
+                    val state = _uiState.value as? GameUiState.Friends ?: return@launch
+                    _uiState.value = state.copy(
+                        searchResults = result.data,
+                        loading = false,
+                        error = null
+                    )
+                }
+                is ApiResult.Failure -> handleFriendsFailure(result)
+            }
+        }
+    }
+
+    fun sendFriendRequest(accountId: String) {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(actionInFlight = true, error = null)
+        viewModelScope.launch {
+            when (val result = authApi.sendFriendRequest(
+                httpBaseUrl(lastServerUrl), session.authToken, accountId
+            )) {
+                is ApiResult.Success -> {
+                    _toast.value = "好友申请已发送"
+                    loadFriends(current.query)
+                }
+                is ApiResult.Failure -> handleFriendsFailure(result)
+            }
+        }
+    }
+
+    fun acceptFriendRequest(requestId: String) = resolveFriendRequest(requestId, true)
+
+    fun rejectFriendRequest(requestId: String) = resolveFriendRequest(requestId, false)
+
+    fun removeFriend(accountId: String) {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(actionInFlight = true, error = null)
+        viewModelScope.launch {
+            when (val result = authApi.removeFriend(
+                httpBaseUrl(lastServerUrl), session.authToken, accountId
+            )) {
+                is ApiResult.Success -> {
+                    _toast.value = "已删除好友"
+                    loadFriends(current.query)
+                }
+                is ApiResult.Failure -> handleFriendsFailure(result)
+            }
+        }
     }
 
     fun openAccount() {
@@ -737,6 +825,9 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 accounts = (accounts as ApiResult.Success).data.accounts,
                 rooms = (rooms as ApiResult.Success).data.rooms,
                 onlineAccounts = (online as ApiResult.Success).data.accounts,
+                appOnlineAccounts = (online as ApiResult.Success).data.appAccounts,
+                appOnlineCount = (online as ApiResult.Success).data.appOnlineCount,
+                roomOnlineCount = (online as ApiResult.Success).data.roomOnlineCount,
                 registrationEnabled = (registration as ApiResult.Success).data.enabled,
                 auditRecords = (audit as ApiResult.Success).data.records,
                 loading = false,
@@ -748,6 +839,59 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                 query = query
             )
         }
+    }
+
+    private fun loadFriends(query: String = "") {
+        val session = authSession ?: return showAuth()
+        viewModelScope.launch {
+            when (val result = authApi.friends(httpBaseUrl(lastServerUrl), session.authToken)) {
+                is ApiResult.Success -> {
+                    val current = _uiState.value as? GameUiState.Friends ?: return@launch
+                    _uiState.value = current.copy(
+                        friends = result.data.friends,
+                        requests = result.data.requests,
+                        searchResults = if (query == current.query) current.searchResults else emptyList(),
+                        loading = false,
+                        error = null,
+                        actionInFlight = false
+                    )
+                }
+                is ApiResult.Failure -> handleFriendsFailure(result)
+            }
+        }
+    }
+
+    private fun resolveFriendRequest(requestId: String, accept: Boolean) {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(actionInFlight = true, error = null)
+        viewModelScope.launch {
+            val result = if (accept) {
+                authApi.acceptFriendRequest(httpBaseUrl(lastServerUrl), session.authToken, requestId)
+            } else {
+                authApi.rejectFriendRequest(httpBaseUrl(lastServerUrl), session.authToken, requestId)
+            }
+            when (result) {
+                is ApiResult.Success -> {
+                    _toast.value = if (accept) "已添加好友" else "已忽略好友申请"
+                    loadFriends(current.query)
+                }
+                is ApiResult.Failure -> handleFriendsFailure(result)
+            }
+        }
+    }
+
+    private fun handleFriendsFailure(result: ApiResult.Failure) {
+        if (result.isUnauthorized) {
+            handleAuthenticationExpired()
+            return
+        }
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(
+            loading = false,
+            actionInFlight = false,
+            error = result.message
+        )
     }
 
     fun retryHistory() {
@@ -1105,6 +1249,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             _uiState.value = homeState()
             checkForUpdates(manual = false)
         }
+        startHeartbeat()
     }
 
     private fun showAuth(error: String? = null) {
@@ -1629,6 +1774,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun clearAuthSession() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         authVerifiedThisProcess = false
         authSession = null
         preferences.edit()
@@ -1728,9 +1875,25 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         reconnectJob?.cancel()
+        heartbeatJob?.cancel()
         onlineClient?.close()
         onlineClient = null
         super.onCleared()
+    }
+
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = viewModelScope.launch {
+            while (true) {
+                val session = authSession ?: break
+                val result = authApi.heartbeat(httpBaseUrl(lastServerUrl), session.authToken)
+                if (result is ApiResult.Failure && result.isUnauthorized) {
+                    handleAuthenticationExpired()
+                    break
+                }
+                delay(60_000L)
+            }
+        }
     }
 }
 

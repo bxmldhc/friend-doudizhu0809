@@ -120,6 +120,7 @@ fun HomeScreen(
     onCreateGomoku: () -> Unit,
     onJoinGomoku: (String) -> Unit,
     onHistory: () -> Unit,
+    onFriends: () -> Unit,
     onResume: () -> Unit,
     onAdmin: () -> Unit,
     onAccount: () -> Unit,
@@ -194,6 +195,12 @@ fun HomeScreen(
                     onClick = onHistory
                 )
                 HomeCompactAction(
+                    icon = { Icon(Icons.Default.Person, null, tint = Color.White) },
+                    title = "好友",
+                    subtitle = "查看好友与申请",
+                    onClick = onFriends
+                )
+                HomeCompactAction(
                     icon = { Icon(Icons.Default.ManageAccounts, null, tint = Color.White) },
                     title = "账号设置",
                     subtitle = "账号与登录信息",
@@ -228,6 +235,7 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
                         .padding(if (compact) 16.dp else 22.dp),
                     verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)
                 ) {

@@ -282,6 +282,31 @@ export async function getPublicAccount(
   return account ? toPublicAccount(account) : null;
 }
 
+export async function searchPublicAccounts(
+  rawQuery: string,
+  excludeAccountId = "",
+  requestedLimit = 20,
+): Promise<PublicAccount[]> {
+  const query = rawQuery.trim().normalize("NFKC").toLocaleLowerCase("zh-CN");
+  if (query.length < 2) {
+    throw new AuthError("请至少输入两个字符", "INVALID_ACCOUNT_QUERY");
+  }
+  const limit = Math.max(1, Math.min(20, Math.floor(requestedLimit)));
+  const matches: PublicAccount[] = [];
+  for await (const entry of kv.list<StoredAccount>({ prefix: ["accounts"] })) {
+    const account = entry.value;
+    if (
+      account.accountId === excludeAccountId ||
+      account.disabled ||
+      !account.nicknameKey.includes(query)
+    ) continue;
+    matches.push(toPublicAccount(account));
+  }
+  return matches.sort((left, right) =>
+    left.nickname.localeCompare(right.nickname, "zh-CN")
+  ).slice(0, limit);
+}
+
 export async function listAccountsForAdmin(
   rawQuery = "",
   requestedLimit = 100,

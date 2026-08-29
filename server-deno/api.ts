@@ -12,6 +12,7 @@ import {
   registerAccount,
   resetAccountPassword,
   resolveSession,
+  searchPublicAccounts,
   setAccountDisabled,
   setRegistrationEnabled,
 } from "./game/auth.ts";
@@ -26,6 +27,16 @@ import {
   listAdminAudit,
   recordAdminAudit,
 } from "./game/store.ts";
+import {
+  acceptFriendRequest,
+  listAppOnlineAccounts,
+  listFriendRequests,
+  listFriends,
+  rejectFriendRequest,
+  removeFriend,
+  sendFriendRequest,
+  touchPresence,
+} from "./game/social.ts";
 
 export interface AdminRoomReader {
   getAdminOverview(): AdminRoomOverview;
@@ -67,6 +78,14 @@ export async function handleApiRequest(
       const token = bearerToken(req);
       if (token) await logoutSession(token);
       return json({ ok: true, data: {} });
+    }
+    if (req.method === "POST" && url.pathname === "/api/presence/heartbeat") {
+      const { account } = await requireAccount(req);
+      const presence = await touchPresence(account);
+      return json({
+        ok: true,
+        data: { online: true, lastSeenAt: presence.lastSeenAt },
+      });
     }
     if (
       req.method === "POST" &&
@@ -117,17 +136,71 @@ export async function handleApiRequest(
         },
       });
     }
+    if (req.method === "GET" && url.pathname === "/api/friends") {
+      const { account } = await requireAccount(req);
+      const [friends, requests] = await Promise.all([
+        listFriends(account.accountId),
+        listFriendRequests(account.accountId),
+      ]);
+      return json({ ok: true, data: { friends, requests } });
+    }
+    if (req.method === "GET" && url.pathname === "/api/friends/search") {
+      const { account } = await requireAccount(req);
+      const query = url.searchParams.get("query") ?? "";
+      const accounts = await searchPublicAccounts(query, account.accountId);
+      return json({
+        ok: true,
+        data: {
+          accounts: accounts.map((item) => ({
+            accountId: item.accountId,
+            nickname: item.nickname,
+            createdAt: item.createdAt,
+          })),
+        },
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/friends/requests") {
+      const { account } = await requireAccount(req);
+      const body = await readJsonObject(req);
+      const request = await sendFriendRequest(
+        account.accountId,
+        String(body.targetAccountId ?? ""),
+      );
+      return json({ ok: true, data: { request } }, 201);
+    }
+    const friendRequestAction = url.pathname.match(
+      /^\/api\/friends\/requests\/([^/]+)\/(accept|reject)$/,
+    );
+    if (req.method === "POST" && friendRequestAction) {
+      const { account } = await requireAccount(req);
+      const requestId = decodePathSegment(friendRequestAction[1]);
+      const action = friendRequestAction[2];
+      if (action === "accept") {
+        const friend = await acceptFriendRequest(account.accountId, requestId);
+        return json({ ok: true, data: { friend } });
+      }
+      await rejectFriendRequest(account.accountId, requestId);
+      return json({ ok: true, data: {} });
+    }
+    const removeFriendMatch = url.pathname.match(/^\/api\/friends\/([^/]+)$/);
+    if (req.method === "DELETE" && removeFriendMatch) {
+      const { account } = await requireAccount(req);
+      await removeFriend(account.accountId, decodePathSegment(removeFriendMatch[1]));
+      return json({ ok: true, data: {} });
+    }
     if (req.method === "GET" && url.pathname === "/api/admin/overview") {
       await requireAdmin(req);
       const roomManager = requireRoomManager(dependencies);
-      const [accountCount, roomOverview] = await Promise.all([
+      const [accountCount, roomOverview, appAccounts] = await Promise.all([
         countAccounts(),
         Promise.resolve(roomManager.getAdminOverview()),
+        listAppOnlineAccounts(),
       ]);
       return json({
         ok: true,
         data: {
           accountCount,
+          appOnlineCount: appAccounts.length,
           ...roomOverview,
         },
       });
@@ -189,10 +262,24 @@ export async function handleApiRequest(
     if (req.method === "GET" && url.pathname === "/api/admin/online") {
       await requireAdmin(req);
       const roomManager = requireRoomManager(dependencies);
+      const [roomAccounts, appAccounts] = await Promise.all([
+        Promise.resolve(roomManager.getAdminOnlineAccounts()),
+        listAppOnlineAccounts(),
+      ]);
       return json({
         ok: true,
         data: {
-          accounts: roomManager.getAdminOnlineAccounts(),
+          accounts: roomAccounts,
+          appAccounts: appAccounts.map((account) => ({
+            nickname: account.nickname,
+            online: true,
+            location: "APP",
+            gameType: "",
+            roomCode: "",
+            lastActiveAt: account.lastSeenAt,
+          })),
+          appOnlineCount: appAccounts.length,
+          roomOnlineCount: roomAccounts.length,
         },
       });
     }
@@ -429,7 +516,7 @@ function json(body: unknown, status = 200): Response {
       "cache-control": "no-store",
       "access-control-allow-origin": "*",
       "access-control-allow-headers": "authorization, content-type",
-      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
     },
   });
 }

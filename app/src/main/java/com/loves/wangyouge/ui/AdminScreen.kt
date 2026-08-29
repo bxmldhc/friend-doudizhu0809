@@ -118,6 +118,7 @@ fun AdminScreen(
                 ) {
                     SummaryTile("账号", overview.accountCount.toString(), Modifier.weight(1f))
                     SummaryTile("房间", overview.roomCount.toString(), Modifier.weight(1f))
+                    SummaryTile("应用在线", overview.appOnlineCount.toString(), Modifier.weight(1f))
                     SummaryTile("在线真人", overview.connectedHumanCount.toString(), Modifier.weight(1f))
                     SummaryTile("进行中", overview.activeGameCount.toString(), Modifier.weight(1f))
                 }
@@ -257,12 +258,42 @@ fun AdminScreen(
                 }
             }
             selectedTab == 1 -> {
-                items(onOnlineAccounts, key = { "${it.nickname}-${it.roomCode}" }) { account ->
+                item(key = "app-online-title") {
+                    Text(
+                        "应用在线 · 最近 150 秒有心跳（${state.appOnlineCount}）",
+                        color = AdminWax,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                items(
+                    state.appOnlineAccounts,
+                    key = { "app-${it.nickname}-${it.lastActiveAt}" }
+                ) { account ->
+                    OnlineAccountRow(account)
+                }
+                if (!state.loading && state.appOnlineAccounts.isEmpty()) {
+                    item(key = "app-online-empty") {
+                        AdminEmptyState("当前没有仅在应用内在线的账号")
+                    }
+                }
+                item(key = "room-online-title") {
+                    Text(
+                        "房间内在线 · ${state.roomOnlineCount}",
+                        color = AdminWax,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                items(
+                    onOnlineAccounts,
+                    key = { "room-${it.nickname}-${it.roomCode}-${it.lastActiveAt}" }
+                ) { account ->
                     OnlineAccountRow(account)
                 }
                 if (!state.loading && onOnlineAccounts.isEmpty()) {
                     item(key = "online-empty") {
-                        AdminEmptyState("当前没有已登录的在线账号")
+                        AdminEmptyState("当前没有房间内在线的账号")
                     }
                 }
             }
@@ -328,7 +359,11 @@ private fun OnlineAccountRow(account: AdminOnlineAccount) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(account.nickname, color = Color.White, fontWeight = FontWeight.Bold)
                 Text(
-                    "${if (account.gameType == "GOMOKU") "五子棋" else "斗地主"} · 房间 ${account.roomCode}",
+                    if (account.location == "APP") {
+                        "应用内在线 · 最近心跳 ${formatTime(account.lastActiveAt)}"
+                    } else {
+                        "${if (account.gameType == "GOMOKU") "五子棋" else "斗地主"} · 房间 ${account.roomCode}"
+                    },
                     color = AdminMuted,
                     fontSize = 11.sp
                 )

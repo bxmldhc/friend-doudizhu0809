@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
@@ -84,6 +85,7 @@ fun GomokuEntryScreen(
 ) {
     var serverUrl by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
     var roomCode by remember(state.initialRoom) { mutableStateOf(state.initialRoom) }
+    var withAi by remember { mutableStateOf(false) }
     Box(
         Modifier.fillMaxSize().background(GomokuPage).padding(20.dp),
         contentAlignment = Alignment.Center
@@ -113,18 +115,35 @@ fun GomokuEntryScreen(
                     label = { Text("服务器地址") },
                     singleLine = true
                 )
+                Surface(
+                    color = Color(0xFF102E36),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("加入 AI 对手", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (withAi) "创建后由 AI 自动占用白方" else "创建后等待朋友加入",
+                                color = GomokuMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(checked = withAi, onCheckedChange = { withAi = it })
+                    }
+                }
                 Button(
-                    onClick = { onCreate(serverUrl) },
+                    onClick = {
+                        if (withAi) onCreateWithAi(serverUrl) else onCreate(serverUrl)
+                    },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
                 ) {
-                    Text("与朋友对弈", fontWeight = FontWeight.Bold)
-                }
-                OutlinedButton(
-                    onClick = { onCreateWithAi(serverUrl) },
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) {
-                    Text("与 AI 练习")
+                    Text("创建房间", fontWeight = FontWeight.Bold)
                 }
                 Text("或加入朋友的房间", color = GomokuWax, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

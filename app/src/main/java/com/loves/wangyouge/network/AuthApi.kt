@@ -37,7 +37,8 @@ data class AdminOverview(
     val accountCount: Int,
     val roomCount: Int,
     val connectedHumanCount: Int,
-    val activeGameCount: Int
+    val activeGameCount: Int,
+    val appOnlineCount: Int = 0
 )
 
 data class AdminAccount(
@@ -99,11 +100,35 @@ data class AdminOnlineAccount(
     val nickname: String,
     val gameType: String,
     val roomCode: String,
-    val lastActiveAt: Long
+    val lastActiveAt: Long,
+    val location: String = "ROOM"
 )
 
 data class AdminOnlineAccountList(
-    val accounts: List<AdminOnlineAccount>
+    val accounts: List<AdminOnlineAccount>,
+    val appAccounts: List<AdminOnlineAccount> = emptyList(),
+    val appOnlineCount: Int = appAccounts.size,
+    val roomOnlineCount: Int = accounts.size
+)
+
+data class FriendProfile(
+    val accountId: String,
+    val nickname: String,
+    val createdAt: Long,
+    val online: Boolean,
+    val lastSeenAt: Long? = null
+)
+
+data class FriendRequest(
+    val requestId: String,
+    val account: FriendProfile,
+    val direction: String,
+    val createdAt: Long
+)
+
+data class FriendsSnapshot(
+    val friends: List<FriendProfile>,
+    val requests: List<FriendRequest>
 )
 
 data class AccountStats(
@@ -227,6 +252,95 @@ class AuthApi(
                 path = "/api/auth/logout",
                 method = "POST",
                 body = JSONObject(),
+                authToken = authToken
+            ),
+            parser = { Unit }
+        )
+    }
+
+    suspend fun heartbeat(baseUrl: String, authToken: String): ApiResult<Unit> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/presence/heartbeat",
+                method = "POST",
+                body = JSONObject(),
+                authToken = authToken
+            ),
+            parser = { Unit }
+        )
+    }
+
+    suspend fun friends(baseUrl: String, authToken: String): ApiResult<FriendsSnapshot> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/friends",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseFriends
+        )
+    }
+
+    suspend fun searchFriends(
+        baseUrl: String,
+        authToken: String,
+        query: String
+    ): ApiResult<List<FriendProfile>> {
+        val encoded = java.net.URLEncoder.encode(query.trim(), Charsets.UTF_8.name())
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/friends/search?query=$encoded",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseFriendSearch
+        )
+    }
+
+    suspend fun sendFriendRequest(
+        baseUrl: String,
+        authToken: String,
+        targetAccountId: String
+    ): ApiResult<Unit> = friendMutation(
+        baseUrl,
+        "/api/friends/requests",
+        authToken,
+        JSONObject().put("targetAccountId", targetAccountId)
+    )
+
+    suspend fun acceptFriendRequest(
+        baseUrl: String,
+        authToken: String,
+        requestId: String
+    ): ApiResult<Unit> = friendMutation(
+        baseUrl,
+        "/api/friends/requests/${java.net.URLEncoder.encode(requestId, Charsets.UTF_8.name())}/accept",
+        authToken
+    )
+
+    suspend fun rejectFriendRequest(
+        baseUrl: String,
+        authToken: String,
+        requestId: String
+    ): ApiResult<Unit> = friendMutation(
+        baseUrl,
+        "/api/friends/requests/${java.net.URLEncoder.encode(requestId, Charsets.UTF_8.name())}/reject",
+        authToken
+    )
+
+    suspend fun removeFriend(
+        baseUrl: String,
+        authToken: String,
+        accountId: String
+    ): ApiResult<Unit> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/friends/${java.net.URLEncoder.encode(accountId, Charsets.UTF_8.name())}",
+                method = "DELETE",
                 authToken = authToken
             ),
             parser = { Unit }
@@ -490,8 +604,27 @@ class AuthApi(
         return when (method) {
             "GET" -> builder.get().build()
             "POST" -> builder.post(requestBody ?: EMPTY_JSON_BODY).build()
+            "DELETE" -> builder.delete().build()
             else -> error("Unsupported method: $method")
         }
+    }
+
+    private suspend fun friendMutation(
+        baseUrl: String,
+        path: String,
+        authToken: String,
+        body: JSONObject = JSONObject()
+    ): ApiResult<Unit> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = path,
+                method = "POST",
+                body = body,
+                authToken = authToken
+            ),
+            parser = { Unit }
+        )
     }
 
     private suspend fun <T> execute(
@@ -679,7 +812,8 @@ internal object AuthResponseParser {
                 "activeGameCount",
                 "activeGames",
                 "playingRoomCount"
-            )
+            ),
+            appOnlineCount = firstInt(overview, "appOnlineCount")
         )
     }
 
@@ -730,19 +864,54 @@ internal object AuthResponseParser {
 
     fun parseAdminOnlineAccounts(root: JSONObject): AdminOnlineAccountList {
         val data = root.optJSONObject("data") ?: root
-        val array = data.optJSONArray("accounts")
-        val accounts = if (array == null) emptyList() else {
-            List(array.length()) { index ->
+        fun parse(array: org.json.JSONArray?): List<AdminOnlineAccount> {
+            if (array == null) return emptyList()
+            return List(array.length()) { index ->
                 val item = array.getJSONObject(index)
                 AdminOnlineAccount(
                     nickname = item.optString("nickname"),
-                    gameType = item.optString("gameType", "DOUDIZHU"),
+                    gameType = item.optString("gameType"),
                     roomCode = item.optString("roomCode"),
-                    lastActiveAt = item.optLong("lastActiveAt")
+                    lastActiveAt = item.optLong("lastActiveAt"),
+                    location = item.optString("location", "ROOM")
                 )
             }
         }
-        return AdminOnlineAccountList(accounts)
+        val accounts = parse(data.optJSONArray("accounts"))
+        val appAccounts = parse(data.optJSONArray("appAccounts"))
+        return AdminOnlineAccountList(
+            accounts = accounts,
+            appAccounts = appAccounts,
+            appOnlineCount = data.optInt("appOnlineCount", appAccounts.size),
+            roomOnlineCount = data.optInt("roomOnlineCount", accounts.size)
+        )
+    }
+
+    fun parseFriends(root: JSONObject): FriendsSnapshot {
+        val data = root.optJSONObject("data") ?: root
+        val friends = data.optJSONArray("friends")?.let { array ->
+            List(array.length()) { index -> parseFriendProfile(array.getJSONObject(index)) }
+        }.orEmpty()
+        val requests = data.optJSONArray("requests")?.let { array ->
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                FriendRequest(
+                    requestId = item.optString("requestId"),
+                    account = parseFriendProfile(item.optJSONObject("account") ?: JSONObject()),
+                    direction = item.optString("direction"),
+                    createdAt = item.optLong("createdAt")
+                )
+            }
+        }.orEmpty()
+        return FriendsSnapshot(friends, requests)
+    }
+
+    fun parseFriendSearch(root: JSONObject): List<FriendProfile> {
+        val data = root.optJSONObject("data") ?: root
+        val accounts = data.optJSONArray("accounts") ?: return emptyList()
+        return List(accounts.length()) { index ->
+            parseFriendProfile(accounts.getJSONObject(index))
+        }
     }
 
     fun parseResetPassword(root: JSONObject): AdminAccount {
@@ -866,6 +1035,16 @@ internal object AuthResponseParser {
             totalScore = firstInt(item, "totalScore", "score", "points"),
             games = firstInt(item, "games", "gameCount", "totalGames"),
             wins = firstInt(item, "wins", "winCount", "totalWins")
+        )
+    }
+
+    private fun parseFriendProfile(item: JSONObject): FriendProfile {
+        return FriendProfile(
+            accountId = firstString(item, "accountId", "id", "playerId"),
+            nickname = firstString(item, "nickname", "name"),
+            createdAt = firstLong(item, "createdAt"),
+            online = firstBoolean(item, "online") == true,
+            lastSeenAt = firstLong(item, "lastSeenAt").takeIf { it > 0L }
         )
     }
 

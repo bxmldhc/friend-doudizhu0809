@@ -87,9 +87,10 @@ fun DoudizhuApp(
                     state = state,
                     onCreate = viewModel::openCreateRoom,
                     onJoin = viewModel::openJoinRoom,
-                    onCreateGomoku = { viewModel.createGomokuRoom(state.serverUrl) },
+                    onCreateGomoku = viewModel::openGomoku,
                     onJoinGomoku = { room -> viewModel.joinGomokuRoom(room, state.serverUrl) },
                     onHistory = viewModel::openHistory,
+                    onFriends = viewModel::openFriends,
                     onResume = viewModel::resumeSavedRoom,
                     onAdmin = viewModel::openAdmin,
                     onAccount = viewModel::openAccount,
@@ -179,6 +180,16 @@ fun DoudizhuApp(
                     error = state.error,
                     onBack = viewModel::backHome,
                     onRetry = viewModel::retryHistory
+                )
+                is GameUiState.Friends -> FriendsScreen(
+                    state = state,
+                    onBack = viewModel::backHome,
+                    onRefresh = viewModel::refreshFriends,
+                    onSearch = viewModel::searchFriends,
+                    onSendRequest = viewModel::sendFriendRequest,
+                    onAccept = viewModel::acceptFriendRequest,
+                    onReject = viewModel::rejectFriendRequest,
+                    onRemove = viewModel::removeFriend
                 )
                 is GameUiState.Account -> AccountScreen(
                     state = state,
