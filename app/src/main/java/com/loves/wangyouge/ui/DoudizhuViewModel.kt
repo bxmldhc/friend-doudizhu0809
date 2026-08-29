@@ -967,6 +967,44 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun openGomokuPlayerProfile(seatIndex: Int) {
+        val playing = _uiState.value as? GameUiState.GomokuPlaying ?: return
+        val seat = playing.state.seats.getOrNull(seatIndex) ?: return
+        if (seat.isAi) {
+            _playerProfile.value = PlayerProfileUiState.Unavailable(
+                nickname = seat.name,
+                message = "服务器 AI 没有长期战绩"
+            )
+            return
+        }
+        val session = authSession
+        if (seat.playerId.isBlank() || session == null) {
+            _playerProfile.value = PlayerProfileUiState.Unavailable(
+                nickname = seat.name,
+                message = "该玩家暂无可查询的账号战绩"
+            )
+            return
+        }
+        _playerProfile.value = PlayerProfileUiState.Loading(seat.name)
+        viewModelScope.launch {
+            when (val result = authApi.playerStats(
+                httpBaseUrl(lastServerUrl),
+                session.authToken,
+                seat.playerId
+            )) {
+                is ApiResult.Success -> _playerProfile.value = PlayerProfileUiState.Ready(result.data)
+                is ApiResult.Failure -> _playerProfile.value = PlayerProfileUiState.Unavailable(
+                    nickname = seat.name,
+                    message = if (result.statusCode == 404) {
+                        "该玩家还没有可展示的历史战绩"
+                    } else {
+                        result.message
+                    }
+                )
+            }
+        }
+    }
+
     fun dismissPlayerProfile() {
         _playerProfile.value = PlayerProfileUiState.Hidden
     }
@@ -1884,14 +1922,25 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = viewModelScope.launch {
+            sendHeartbeat()
             while (true) {
-                val session = authSession ?: break
-                val result = authApi.heartbeat(httpBaseUrl(lastServerUrl), session.authToken)
-                if (result is ApiResult.Failure && result.isUnauthorized) {
+                delay(10_000L)
+                if (!sendHeartbeat()) break
+            }
+        }
+    }
+
+    private suspend fun sendHeartbeat(): Boolean {
+        val session = authSession ?: return false
+        return when (val result = authApi.heartbeat(httpBaseUrl(lastServerUrl), session.authToken)) {
+            is ApiResult.Success -> true
+            is ApiResult.Failure -> {
+                if (result.isUnauthorized) {
                     handleAuthenticationExpired()
-                    break
+                    false
+                } else {
+                    true
                 }
-                delay(60_000L)
             }
         }
     }

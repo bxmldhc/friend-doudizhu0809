@@ -132,6 +132,7 @@ export async function handleApiRequest(
           landlordWins: stored?.landlordWins ?? 0,
           farmerGames: stored?.farmerGames ?? 0,
           farmerWins: stored?.farmerWins ?? 0,
+          gameStats: stored?.gameStats ?? {},
           recentMatches,
         },
       });
@@ -408,6 +409,7 @@ export async function handleApiRequest(
           landlordWins: stored?.landlordWins ?? 0,
           farmerGames: stored?.farmerGames ?? 0,
           farmerWins: stored?.farmerWins ?? 0,
+          gameStats: stored?.gameStats ?? {},
         },
       });
     }

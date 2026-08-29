@@ -27,11 +27,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -66,6 +68,8 @@ import com.loves.wangyouge.model.GOMOKU_BOARD_SIZE
 import com.loves.wangyouge.model.GomokuPhase
 import com.loves.wangyouge.model.GomokuSeat
 import com.loves.wangyouge.model.GomokuState
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 private val GomokuPage = Color(0xFF091F27)
 private val GomokuSurface = Color(0xFF12343B)
@@ -74,6 +78,12 @@ private val GomokuWax = Color(0xFFF2D675)
 private val GomokuMuted = Color(0xFFB4CED0)
 private val GomokuBoard = Color(0xFFD6AC68)
 private val GomokuGrid = Color(0xFF714D2A)
+private val gomokuQuickMessages = listOf(
+    "WAIT_A_MOMENT" to "稍等一下",
+    "READY_TO_START" to "可以开始了",
+    "PLAY_AGAIN" to "再来一局",
+    "GOOD_GAME" to "下得漂亮"
+)
 
 @Composable
 fun GomokuEntryScreen(
@@ -297,10 +307,16 @@ fun GomokuGameScreen(
     onRestart: () -> Unit,
     onRetry: () -> Unit,
     onExit: () -> Unit,
-    onDisband: () -> Unit
+    onDisband: () -> Unit,
+    onQuickMessage: (String) -> Unit,
+    quickMessage: QuickMessageUi?,
+    playerProfile: PlayerProfileUiState,
+    onPlayerProfile: (Int) -> Unit,
+    onDismissPlayerProfile: () -> Unit
 ) {
     var showExitConfirm by remember { mutableStateOf(false) }
     var showDisbandConfirm by remember { mutableStateOf(false) }
+    var showQuickMessages by remember { mutableStateOf(false) }
     val game = state.state
     val canMove = state.connection == AppConnectionState.ONLINE &&
         game.phase == GomokuPhase.PLAYING &&
@@ -313,10 +329,11 @@ fun GomokuGameScreen(
                 roomCode = state.roomCode,
                 gameNumber = game.gameNumber,
                 connection = state.connection,
-                onExit = { showExitConfirm = true }
+                onExit = { showExitConfirm = true },
+                onQuickMessage = { showQuickMessages = true }
             )
             Row(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -324,10 +341,12 @@ fun GomokuGameScreen(
                     seat = game.seats.getOrNull(0),
                     fallback = state.players.getOrElse(0) { "黑方" },
                     isCurrent = game.phase == GomokuPhase.PLAYING && game.turnIndex == 0,
-                    modifier = Modifier.weight(0.72f).fillMaxHeight()
+                    isReady = game.readySeats.getOrElse(0) { false },
+                    onClick = { onPlayerProfile(0) },
+                    modifier = Modifier.weight(0.48f).fillMaxHeight()
                 )
                 Box(
-                    modifier = Modifier.weight(1.45f).fillMaxHeight(),
+                    modifier = Modifier.weight(2.2f).fillMaxHeight(),
                     contentAlignment = Alignment.Center
                 ) {
                     GomokuBoardCanvas(
@@ -335,14 +354,16 @@ fun GomokuGameScreen(
                         winningLine = game.winningLine.map { it.row to it.col }.toSet(),
                         enabled = canMove,
                         onMove = onMove,
-                        modifier = Modifier.fillMaxHeight(0.93f).aspectRatio(1f)
+                        modifier = Modifier.fillMaxHeight(0.99f).aspectRatio(1f)
                     )
                 }
                 GomokuPlayerPanel(
                     seat = game.seats.getOrNull(1),
                     fallback = state.players.getOrElse(1) { "白方" },
                     isCurrent = game.phase == GomokuPhase.PLAYING && game.turnIndex == 1,
-                    modifier = Modifier.weight(0.72f).fillMaxHeight()
+                    isReady = game.readySeats.getOrElse(1) { false },
+                    onClick = { onPlayerProfile(1) },
+                    modifier = Modifier.weight(0.48f).fillMaxHeight()
                 )
             }
             if (game.phase == GomokuPhase.PLAYING) {
@@ -377,6 +398,22 @@ fun GomokuGameScreen(
                 }
             }
         }
+        quickMessage?.let {
+            GomokuQuickMessageBubble(
+                message = gomokuQuickMessageLabel(it.messageId),
+                seat = it.seat,
+                mySeat = state.mySeat
+            )
+        }
+        if (showQuickMessages) {
+            GomokuQuickMessageMenu(
+                onSelect = {
+                    showQuickMessages = false
+                    onQuickMessage(it)
+                },
+                onDismiss = { showQuickMessages = false }
+            )
+        }
     }
     if (showExitConfirm) {
         GomokuConfirmDialog(
@@ -394,6 +431,7 @@ fun GomokuGameScreen(
             onDismiss = { showDisbandConfirm = false }
         )
     }
+    GomokuPlayerProfileDialog(playerProfile, onDismissPlayerProfile)
 }
 
 @Composable
@@ -401,7 +439,8 @@ private fun GomokuTopBar(
     roomCode: String,
     gameNumber: Int?,
     connection: AppConnectionState,
-    onExit: () -> Unit
+    onExit: () -> Unit,
+    onQuickMessage: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
@@ -416,6 +455,11 @@ private fun GomokuTopBar(
             Text("第 $it 局", color = GomokuMuted, fontSize = 12.sp)
         }
         Spacer(Modifier.weight(1f))
+        if (onQuickMessage != null) {
+            IconButton(onClick = onQuickMessage) {
+                Icon(Icons.Default.ChatBubbleOutline, "快捷消息", tint = GomokuMuted)
+            }
+        }
         Text(
             when (connection) {
                 AppConnectionState.ONLINE -> "已同步"
@@ -450,11 +494,13 @@ private fun GomokuPlayerPanel(
     seat: GomokuSeat?,
     fallback: String,
     isCurrent: Boolean,
+    isReady: Boolean,
+    onClick: () -> Unit,
     modifier: Modifier
 ) {
     val isBlack = seat?.stone != "WHITE"
     Surface(
-        modifier = modifier,
+        modifier = modifier.clickable(onClick = onClick),
         color = if (isCurrent) Color(0xFF16434A) else GomokuSurface,
         shape = RoundedCornerShape(8.dp)
     ) {
@@ -477,6 +523,10 @@ private fun GomokuPlayerPanel(
             }
             Spacer(Modifier.height(6.dp))
             Text("场分 ${seat?.score ?: 0}", color = GomokuMuted, fontSize = 12.sp)
+            if (!isCurrent && isReady) {
+                Spacer(Modifier.height(5.dp))
+                Text("已准备", color = Color(0xFF7ED9A3), fontSize = 11.sp)
+            }
             if (seat?.isAway == true) {
                 Spacer(Modifier.height(6.dp))
                 Text("暂离", color = GomokuCoral, fontSize = 12.sp)
@@ -511,9 +561,17 @@ private fun GomokuBoardCanvas(
                     val side = spacing * (GOMOKU_BOARD_SIZE - 1)
                     val startX = (size.width - side) / 2f
                     val startY = (size.height - side) / 2f
-                    val col = ((tap.x - startX) / spacing).toInt()
-                    val row = ((tap.y - startY) / spacing).toInt()
-                    if (row in 0 until GOMOKU_BOARD_SIZE && col in 0 until GOMOKU_BOARD_SIZE) {
+                    val col = ((tap.x - startX) / spacing).roundToInt()
+                    val row = ((tap.y - startY) / spacing).roundToInt()
+                    val targetX = startX + col * spacing
+                    val targetY = startY + row * spacing
+                    val distance = sqrt((tap.x - targetX) * (tap.x - targetX) +
+                        (tap.y - targetY) * (tap.y - targetY))
+                    if (
+                        row in 0 until GOMOKU_BOARD_SIZE &&
+                        col in 0 until GOMOKU_BOARD_SIZE &&
+                        distance <= spacing * 0.48f
+                    ) {
                         onMove(row, col)
                     }
                 }
@@ -585,6 +643,13 @@ private fun GomokuFinishedBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(result, color = if (game.winnerIndex == state.mySeat) Color(0xFF7ED9A3) else GomokuWax, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "${game.seats.getOrNull(0)?.name ?: "黑方"} ${game.seats.getOrNull(0)?.score ?: 0} : " +
+                    "${game.seats.getOrNull(1)?.score ?: 0} ${game.seats.getOrNull(1)?.name ?: "白方"}",
+                color = GomokuMuted,
+                fontSize = 12.sp
+            )
             Spacer(Modifier.weight(1f))
             if (!ready) {
                 Button(
@@ -604,6 +669,98 @@ private fun GomokuFinishedBar(
                 Text("已准备，等待对方", color = GomokuMuted, fontSize = 12.sp)
             }
         }
+    }
+}
+
+private fun gomokuQuickMessageLabel(id: String): String {
+    return gomokuQuickMessages.firstOrNull { it.first == id }?.second ?: "快捷消息"
+}
+
+@Composable
+private fun GomokuQuickMessageMenu(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize().clickable(onClick = onDismiss),
+        contentAlignment = Alignment.TopEnd
+    ) {
+        Surface(
+            modifier = Modifier.padding(top = 48.dp, end = 10.dp),
+            color = Color(0xFF12343B),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                gomokuQuickMessages.forEach { (id, label) ->
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        modifier = Modifier
+                            .clickable { onSelect(id) }
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GomokuQuickMessageBubble(message: String, seat: Int, mySeat: Int) {
+    Box(
+        modifier = Modifier.fillMaxSize().padding(18.dp),
+        contentAlignment = if (seat == mySeat) Alignment.BottomStart else Alignment.BottomEnd
+    ) {
+        Surface(color = GomokuSurface, shape = RoundedCornerShape(8.dp)) {
+            Text(message, color = Color.White, modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
+        }
+    }
+}
+
+@Composable
+private fun GomokuPlayerProfileDialog(
+    state: PlayerProfileUiState,
+    onDismiss: () -> Unit
+) {
+    val title = when (state) {
+        PlayerProfileUiState.Hidden -> return
+        is PlayerProfileUiState.Loading -> state.nickname
+        is PlayerProfileUiState.Ready -> state.stats.nickname
+        is PlayerProfileUiState.Unavailable -> state.nickname
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            when (state) {
+                PlayerProfileUiState.Hidden -> Unit
+                is PlayerProfileUiState.Loading -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("正在读取历史战绩")
+                }
+                is PlayerProfileUiState.Unavailable -> Text(state.message)
+                is PlayerProfileUiState.Ready -> {
+                    val stats = state.stats.gameStats["GOMOKU"]
+                    val games = stats?.games ?: 0
+                    val wins = stats?.wins ?: 0
+                    val winRate = if (games == 0) 0 else wins * 100 / games
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        GomokuProfileStat("五子棋场分", (stats?.totalScore ?: 0).toString())
+                        GomokuProfileStat("完成对局", games.toString())
+                        GomokuProfileStat("获胜局数", wins.toString())
+                        GomokuProfileStat("胜率", "$winRate%")
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("关闭") } }
+    )
+}
+
+@Composable
+private fun GomokuProfileStat(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = GomokuMuted, modifier = Modifier.weight(1f))
+        Text(value, color = Color.White, fontWeight = FontWeight.Bold)
     }
 }
 

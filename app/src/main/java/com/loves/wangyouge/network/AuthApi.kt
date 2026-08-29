@@ -140,7 +140,18 @@ data class AccountStats(
     val landlordWins: Int = 0,
     val farmerGames: Int = 0,
     val farmerWins: Int = 0,
-    val recentMatches: List<RecentMatch> = emptyList()
+    val recentMatches: List<RecentMatch> = emptyList(),
+    val gameStats: Map<String, GameStats> = emptyMap()
+)
+
+data class GameStats(
+    val totalScore: Int = 0,
+    val games: Int = 0,
+    val wins: Int = 0,
+    val landlordGames: Int = 0,
+    val landlordWins: Int = 0,
+    val farmerGames: Int = 0,
+    val farmerWins: Int = 0
 )
 
 data class RecentMatch(
@@ -148,6 +159,7 @@ data class RecentMatch(
     val roomCode: String,
     val startedAt: Long,
     val updatedAt: Long,
+    val gameType: String = "DOUDIZHU",
     val rounds: List<MatchRound>
 )
 
@@ -176,7 +188,8 @@ data class PublicPlayerStats(
     val landlordGames: Int = 0,
     val landlordWins: Int = 0,
     val farmerGames: Int = 0,
-    val farmerWins: Int = 0
+    val farmerWins: Int = 0,
+    val gameStats: Map<String, GameStats> = emptyMap()
 )
 
 sealed interface ApiResult<out T> {
@@ -734,12 +747,29 @@ internal object AuthResponseParser {
             landlordWins = firstInt(stats, "landlordWins"),
             farmerGames = firstInt(stats, "farmerGames"),
             farmerWins = firstInt(stats, "farmerWins"),
+            gameStats = parseGameStats(stats.optJSONObject("gameStats")),
             recentMatches = stats.optJSONArray("recentMatches")?.let { matches ->
                 List(matches.length()) { index ->
                     parseRecentMatch(matches.getJSONObject(index))
                 }
             }.orEmpty()
         )
+    }
+
+    private fun parseGameStats(value: JSONObject?): Map<String, GameStats> {
+        if (value == null) return emptyMap()
+        return value.keys().asSequence().associateWith { key ->
+            val item = value.optJSONObject(key) ?: JSONObject()
+            GameStats(
+                totalScore = firstInt(item, "totalScore"),
+                games = firstInt(item, "games"),
+                wins = firstInt(item, "wins"),
+                landlordGames = firstInt(item, "landlordGames"),
+                landlordWins = firstInt(item, "landlordWins"),
+                farmerGames = firstInt(item, "farmerGames"),
+                farmerWins = firstInt(item, "farmerWins")
+            )
+        }
     }
 
     private fun parseRecentMatch(item: JSONObject): RecentMatch {
@@ -749,6 +779,7 @@ internal object AuthResponseParser {
             roomCode = item.optString("roomCode"),
             startedAt = item.optLong("startedAt"),
             updatedAt = item.optLong("updatedAt"),
+            gameType = item.optString("gameType").ifBlank { "DOUDIZHU" },
             rounds = if (rounds == null) emptyList() else {
                 List(rounds.length()) { index ->
                     parseMatchRound(rounds.getJSONObject(index))
@@ -791,7 +822,8 @@ internal object AuthResponseParser {
             landlordGames = firstInt(stats, "landlordGames"),
             landlordWins = firstInt(stats, "landlordWins"),
             farmerGames = firstInt(stats, "farmerGames"),
-            farmerWins = firstInt(stats, "farmerWins")
+            farmerWins = firstInt(stats, "farmerWins"),
+            gameStats = parseGameStats(stats.optJSONObject("gameStats"))
         )
     }
 

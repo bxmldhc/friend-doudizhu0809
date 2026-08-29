@@ -172,6 +172,7 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
               "landlordWins",
               "farmerGames",
               "farmerWins",
+              "gameStats",
             ],
             "公开战绩字段",
           );

@@ -95,9 +95,6 @@ fun FriendsScreen(
             Tab(selectedTab == 1, { selectedTab = 1 }, text = { Text("好友申请") })
             Tab(selectedTab == 2, { selectedTab = 2 }, text = { Text("添加好友") })
         }
-        state.error?.let {
-            Text(it, color = Color(0xFFF28B78), fontSize = 13.sp, modifier = Modifier.padding(horizontal = 18.dp))
-        }
         when {
             state.loading && state.friends.isEmpty() && state.requests.isEmpty() && state.searchResults.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -108,11 +105,12 @@ fun FriendsScreen(
                 FriendList(
                     friends = state.friends,
                     emptyText = "还没有好友，去添加一位朋友吧",
-                    onRemove = { removeTarget = it }
+                    onRemove = { removeTarget = it },
+                    error = state.error
                 )
             }
             selectedTab == 1 -> {
-                RequestList(state.requests, state.actionInFlight, onAccept, onReject)
+                RequestList(state.requests, state.actionInFlight, onAccept, onReject, state.error)
             }
             else -> {
                 AddFriendPanel(
@@ -122,7 +120,8 @@ fun FriendsScreen(
                     actionInFlight = state.actionInFlight,
                     onQueryChange = { query = it.take(24) },
                     onSearch = { onSearch(query.trim()) },
-                    onSendRequest = onSendRequest
+                    onSendRequest = onSendRequest,
+                    error = state.error
                 )
             }
         }
@@ -148,13 +147,15 @@ fun FriendsScreen(
 private fun FriendList(
     friends: List<FriendProfile>,
     emptyText: String,
-    onRemove: (FriendProfile) -> Unit
+    onRemove: (FriendProfile) -> Unit,
+    error: String?
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (!error.isNullOrBlank()) item { FriendError(error) }
         items(friends, key = { it.accountId }) { friend ->
             Surface(color = FriendsPanel, modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -189,13 +190,15 @@ private fun RequestList(
     requests: List<FriendRequest>,
     actionInFlight: Boolean,
     onAccept: (String) -> Unit,
-    onReject: (String) -> Unit
+    onReject: (String) -> Unit,
+    error: String?
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (!error.isNullOrBlank()) item { FriendError(error) }
         items(requests, key = { it.requestId }) { request ->
             Surface(color = FriendsPanel, modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -240,12 +243,14 @@ private fun AddFriendPanel(
     actionInFlight: Boolean,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
-    onSendRequest: (String) -> Unit
+    onSendRequest: (String) -> Unit,
+    error: String?
 ) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        if (!error.isNullOrBlank()) FriendError(error)
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = query,
@@ -285,4 +290,14 @@ private fun AddFriendPanel(
             }
         }
     }
+}
+
+@Composable
+private fun FriendError(message: String) {
+    Text(
+        "操作失败：$message",
+        color = Color(0xFFF28B78),
+        fontSize = 13.sp,
+        modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp)
+    )
 }

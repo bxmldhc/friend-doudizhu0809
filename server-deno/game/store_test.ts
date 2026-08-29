@@ -165,6 +165,43 @@ Deno.test("recordGame 不为 AI 创建个人统计", async () => {
   }
 });
 
+Deno.test("分类战绩分别累计斗地主和五子棋", async () => {
+  const playerId = testPlayerId("game-stats");
+  const farmerId = testPlayerId("game-stats-farmer");
+  const doudizhu = factionContext(playerId, farmerId, playerId);
+  const gomoku: MatchContext = {
+    matchId: crypto.randomUUID(),
+    roomCode: "654321",
+    startedAt: 3,
+    gameType: "GOMOKU",
+    round: {
+      gameNumber: 1,
+      finishedAt: 4,
+      winnerPlayerId: playerId,
+      landlordPlayerId: null,
+      multiplier: 1,
+      players: [
+        { playerId, name: "五子棋玩家", delta: 1, isAi: false },
+        { playerId: farmerId, name: "对手", delta: -1, isAi: false },
+      ],
+    },
+  };
+
+  try {
+    await recordGame(doudizhu.round.players, doudizhu);
+    await recordGame(gomoku.round.players, gomoku);
+    const stats = await getStats(playerId);
+    assertEquals(stats?.gameStats?.DOUDIZHU?.games, 1, "斗地主分类局数");
+    assertEquals(stats?.gameStats?.DOUDIZHU?.landlordWins, 1, "斗地主地主胜场");
+    assertEquals(stats?.gameStats?.GOMOKU?.games, 1, "五子棋分类局数");
+    assertEquals(stats?.gameStats?.GOMOKU?.wins, 1, "五子棋分类胜场");
+    assertEquals(stats?.gameStats?.GOMOKU?.landlordGames, 0, "五子棋不记录地主局数");
+    assertEquals(stats?.gameStats?.GOMOKU?.farmerGames, 0, "五子棋不记录农民局数");
+  } finally {
+    await cleanupPlayers(playerId, farmerId);
+  }
+});
+
 function context(
   matchId: string,
   gameNumber: number,

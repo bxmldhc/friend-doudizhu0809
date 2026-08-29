@@ -10,6 +10,17 @@ export interface PlayerStats {
   landlordWins: number;
   farmerGames: number;
   farmerWins: number;
+  gameStats?: Record<string, GameStats>;
+}
+
+export interface GameStats {
+  totalScore: number;
+  games: number;
+  wins: number;
+  landlordGames: number;
+  landlordWins: number;
+  farmerGames: number;
+  farmerWins: number;
 }
 
 export interface PlayerScoreDelta {
@@ -33,6 +44,7 @@ export interface RecentMatch {
   roomCode: string;
   startedAt: number;
   updatedAt: number;
+  gameType?: "DOUDIZHU" | "GOMOKU";
   rounds: MatchRoundRecord[];
 }
 
@@ -41,6 +53,7 @@ export interface MatchContext {
   roomCode: string;
   startedAt: number;
   round: MatchRoundRecord;
+  gameType?: "DOUDIZHU" | "GOMOKU";
 }
 
 export interface AdminAuditRecord {
@@ -63,6 +76,7 @@ export async function recordGame(
   match?: MatchContext,
 ) {
   const factionResult = getFactionResult(match);
+  const gameType = match?.gameType ?? "DOUDIZHU";
   for (const player of players) {
     if (!player.playerId || player.isAi) continue;
     const key = ["players", player.playerId];
@@ -93,6 +107,14 @@ export async function recordGame(
           (factionResult && !isLandlord ? 1 : 0),
         farmerWins: current.farmerWins +
           (factionResult && !isLandlord && isFactionWinner ? 1 : 0),
+        gameStats: {
+          ...current.gameStats,
+          [gameType]: mergeGameStats(
+            current.gameStats?.[gameType],
+            player,
+            factionResult,
+          ),
+        },
       };
       let operation = kv.atomic()
         .check(entry)
@@ -131,6 +153,39 @@ function normalizePlayerStats(
     landlordWins: stats?.landlordWins ?? 0,
     farmerGames: stats?.farmerGames ?? 0,
     farmerWins: stats?.farmerWins ?? 0,
+    gameStats: stats?.gameStats ?? {},
+  };
+}
+
+function mergeGameStats(
+  current: GameStats | undefined,
+  player: PlayerScoreDelta,
+  factionResult: ReturnType<typeof getFactionResult>,
+): GameStats {
+  const value = current ?? {
+    totalScore: 0,
+    games: 0,
+    wins: 0,
+    landlordGames: 0,
+    landlordWins: 0,
+    farmerGames: 0,
+    farmerWins: 0,
+  };
+  const isLandlord = factionResult?.landlordPlayerId === player.playerId;
+  const isFactionWinner = factionResult
+    ? (isLandlord
+      ? factionResult.winnerFaction === "LANDLORD"
+      : factionResult.winnerFaction === "FARMER")
+    : false;
+  return {
+    totalScore: value.totalScore + player.delta,
+    games: value.games + 1,
+    wins: value.wins + (player.delta > 0 ? 1 : 0),
+    landlordGames: value.landlordGames + (isLandlord ? 1 : 0),
+    landlordWins: value.landlordWins + (isLandlord && isFactionWinner ? 1 : 0),
+    farmerGames: value.farmerGames + (factionResult && !isLandlord ? 1 : 0),
+    farmerWins: value.farmerWins +
+      (factionResult && !isLandlord && isFactionWinner ? 1 : 0),
   };
 }
 
@@ -219,6 +274,7 @@ export function mergeRecentMatch(
     roomCode: context.roomCode,
     startedAt: existing?.startedAt ?? context.startedAt,
     updatedAt: context.round.finishedAt,
+    gameType: context.gameType ?? existing?.gameType ?? "DOUDIZHU",
     rounds,
   };
   return [

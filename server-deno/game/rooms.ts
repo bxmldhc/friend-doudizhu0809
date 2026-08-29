@@ -1002,6 +1002,7 @@ export class RoomManager {
               connectedSeats,
               aiSeats,
               scores,
+              room.playerIds,
               {
                 leaderboard: this.buildLeaderboard(room),
                 roundHistory: room.roundHistory,
@@ -1480,6 +1481,7 @@ export class RoomManager {
         matchId: room.matchId,
         roomCode: room.code,
         startedAt: room.startedAt,
+        gameType: "DOUDIZHU",
         round: {
           gameNumber: state.gameNumber,
           finishedAt: Date.now(),
@@ -1533,6 +1535,35 @@ export class RoomManager {
       scores,
     });
     this.resetReadySeats(room);
+    if (this.options.persistStats !== false) {
+      void recordGame(scores.map((score) => ({
+        playerId: score.playerId,
+        name: score.name,
+        delta: score.delta,
+        isAi: score.isAi || !room.participants.get(score.playerId)
+          ?.isAuthenticated,
+      })), {
+        matchId: room.matchId,
+        roomCode: room.code,
+        startedAt: room.startedAt,
+        gameType: "GOMOKU",
+        round: {
+          gameNumber: state.gameNumber,
+          finishedAt: Date.now(),
+          winnerPlayerId: state.winnerIndex === null
+            ? null
+            : room.playerIds[state.winnerIndex],
+          landlordPlayerId: null,
+          multiplier: 1,
+          players: scores.map((score) => ({
+            playerId: score.playerId,
+            name: score.name,
+            delta: score.delta,
+            isAi: score.isAi,
+          })),
+        },
+      }).catch((error) => console.error("记录五子棋统计失败", error));
+    }
   }
 
   private destroyRoom(room: Room) {

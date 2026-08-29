@@ -218,7 +218,8 @@ object GameProtocol {
                 isAi = seat.optBoolean("isAi", false),
                 isAway = seat.optBoolean("isAway", false),
                 stone = seat.optString("stone", if (index == 0) "BLACK" else "WHITE"),
-                score = seat.optInt("score", 0)
+                score = seat.optInt("score", 0),
+                playerId = seat.optString("playerId")
             )
         }
         val lineJson = obj.optJSONArray("winningLine")

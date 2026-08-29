@@ -219,6 +219,7 @@ export function serializeGomokuState(
   connectedSeats: boolean[],
   aiSeats: boolean[] = [],
   scores: number[] = [],
+  playerIds: Array<string | null> = [],
   roomContext: RoomStateContext | null = null,
 ): Record<string, unknown> {
   return {
@@ -235,6 +236,7 @@ export function serializeGomokuState(
       isAway: !aiSeats[index] && !connectedSeats[index],
       stone: index === 0 ? "BLACK" : "WHITE",
       score: scores[index] ?? 0,
+      playerId: playerIds[index] ?? "",
     })),
     turnIndex: state.turnIndex,
     winnerIndex: state.winnerIndex,

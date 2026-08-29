@@ -24,7 +24,8 @@ data class GomokuSeat(
     val isAi: Boolean,
     val isAway: Boolean,
     val stone: String,
-    val score: Int
+    val score: Int,
+    val playerId: String = ""
 )
 
 data class GomokuPoint(

@@ -172,7 +172,12 @@ fun DoudizhuApp(
                     onRestart = viewModel::restart,
                     onRetry = viewModel::retryConnection,
                     onExit = viewModel::exitToHome,
-                    onDisband = viewModel::disbandRoom
+                    onDisband = viewModel::disbandRoom,
+                    onQuickMessage = viewModel::sendQuickMessage,
+                    quickMessage = quickMessage,
+                    playerProfile = playerProfile,
+                    onPlayerProfile = viewModel::openGomokuPlayerProfile,
+                    onDismissPlayerProfile = viewModel::dismissPlayerProfile
                 )
                 is GameUiState.History -> HistoryScreen(
                     stats = state.stats,

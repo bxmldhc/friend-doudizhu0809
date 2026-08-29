@@ -1,7 +1,8 @@
 import { AuthError, getPublicAccount, type PublicAccount } from "./auth.ts";
 import { kv } from "./db.ts";
 
-const APP_ONLINE_WINDOW_MS = 150_000;
+// 客户端每 10 秒发送一次心跳；保留约 3 次心跳的容错窗口。
+const APP_ONLINE_WINDOW_MS = 35_000;
 const MAX_FRIENDS = 200;
 
 interface AppPresence {
