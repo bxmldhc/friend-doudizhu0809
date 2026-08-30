@@ -353,6 +353,21 @@ Deno.test("等待区房主退出后随机移交，新的房主可以开始游戏
   }
 });
 
+Deno.test("斗地主只有一名真人时房主可以开始并自动补入两个 AI", () => {
+  const manager = new RoomManager({ persistStats: false });
+  const host = new FakeSocket();
+  const code = manager.create(socket(host), "房主", "HARD", 0);
+
+  manager.start(socket(host));
+
+  const state = latestState(host).state as Record<string, unknown>;
+  const seats = state.seats as Record<string, unknown>[];
+  if (seats.length !== 3 || seats.filter((seat) => seat.isHuman === false).length !== 2) {
+    throw new Error("单真人斗地主开局后没有得到完整的三人座位状态");
+  }
+  void code;
+});
+
 Deno.test("游戏中房主退出不销毁房间，玩家身份和排行榜分数继续保留", () => {
   const manager = new RoomManager();
   const host = new FakeSocket();

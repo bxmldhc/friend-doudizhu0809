@@ -22,7 +22,7 @@ cd "E:\桌面\loves\斗地主"
 
 ### 2. 生成发布文件
 
-PowerShell 不负责写 `latest.json`，避免 UTF-8 BOM 导致服务端解析失败。先复制 APK 并计算 SHA256：
+发布命令交付前必须先确认 `app/build.gradle.kts` 中的真实版本号，不能凭记忆填写版本。PowerShell 不负责写 `latest.json`，避免 UTF-8 BOM 导致服务端解析失败。先复制 APK 并计算 SHA256：
 
 ```powershell
 cd "E:\桌面\loves\斗地主"
@@ -30,16 +30,26 @@ Copy-Item "app\build\outputs\apk\release\app-release.apk" "app\build\outputs\apk
 Get-FileHash "app\build\outputs\apk\release\wangyouge-1.1.0.apk" -Algorithm SHA256
 ```
 
-记录输出的 SHA256，下面上传时只上传 APK：
+只有拿到真实 SHA256 后，才能生成最终服务器命令。禁止把 `ACTUAL_SHA256`、`版本号` 或其他占位符直接交给用户执行。
+
+### 3. 上传 APK
+
+只上传 APK 到服务器的 `/home/admin/`，不上传本地 `latest.json`：
 
 ```powershell
 cd "E:\桌面\loves\斗地主"
 scp -O "app\build\outputs\apk\release\wangyouge-1.1.0.apk" admin@114.55.142.169:/home/admin/
 ```
 
-### 3. 服务器更新代码和 APK
+上传完成后必须先确认文件存在，再执行移动操作：
 
-登录服务器后执行。把 `ACTUAL_SHA256` 替换成上一步真实输出的 SHA256：
+```bash
+ls -lh /home/admin/wangyouge-1.1.0.apk
+```
+
+### 4. 服务器更新代码和 APK
+
+登录服务器后执行。`sha256` 必须由发布前实际计算得到，不能留占位符：
 
 ```bash
 cd /opt/friend-doudizhu-server
@@ -50,6 +60,19 @@ printf '%s\n' '{"versionCode":11,"versionName":"1.1.0","apkFile":"wangyouge-1.1.
 sudo systemctl restart friend-doudizhu
 curl http://127.0.0.1:18080/api/app/latest
 ```
+
+标准顺序固定为：
+
+1. 本地构建 APK；
+2. 从源码确认版本号；
+3. 计算真实 SHA256；
+4. 只上传 APK；
+5. 在服务器确认 `/home/admin/` 中确实存在 APK；
+6. 移动 APK；
+7. 在服务器用 `printf` 写入无 BOM 的 `latest.json`；
+8. 重启服务并通过 `/api/app/latest` 校验。
+
+不得跳过第 3、5 或 8 步，不得上传本地 `latest.json`，不得使用旧版本 SHA256。
 
 如果返回 `UPDATE_MANIFEST_INVALID`，优先检查：
 
