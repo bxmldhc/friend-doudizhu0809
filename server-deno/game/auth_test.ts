@@ -54,6 +54,11 @@ Deno.test("account login, uniqueness, session and stats use accountId", async ()
       name: nickname,
       delta: 4,
       isAi: false,
+    }, {
+      playerId: `opponent_${crypto.randomUUID().replaceAll("-", "")}`,
+      name: "测试对手",
+      delta: -4,
+      isAi: false,
     }]);
     const stats = await getStats(registered.account.accountId);
     if (

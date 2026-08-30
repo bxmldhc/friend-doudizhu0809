@@ -231,6 +231,7 @@ fun LobbyScreen(
                 Text("等待房主开始")
             }
         }
+        Spacer(Modifier.height(12.dp))
     }
     if (showDisbandConfirm) {
         AlertDialog(

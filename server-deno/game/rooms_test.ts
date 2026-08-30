@@ -115,12 +115,20 @@ Deno.test("只有认证账号会写入累计战绩，旧版游客仅保留场内
 
     const accountManager = new RoomManager({ aiDelayMs: 0 });
     const account = new FakeSocket();
+    const accountFriend = new FakeSocket();
     const accountCode = accountManager.create(
       socket(account),
       "认证玩家",
       "MEDIUM",
-      2,
+      1,
       accountId,
+      true,
+    );
+    accountManager.join(
+      socket(accountFriend),
+      accountCode,
+      "认证对手",
+      "account-friend",
       true,
     );
     accountManager.start(socket(account));

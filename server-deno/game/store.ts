@@ -75,6 +75,15 @@ export async function recordGame(
   players: PlayerScoreDelta[],
   match?: MatchContext,
 ) {
+  // 真实对局只有至少两名真人参与时才进入个人战绩，纯 AI 陪练不污染统计。
+  // 不带 match 的调用保留为底层统计兼容入口，不代表一场完整对局。
+  if (match) {
+    const humanPlayers = players.filter(
+      (player) => Boolean(player.playerId?.trim()) && !player.isAi,
+    );
+    if (humanPlayers.length < 2) return;
+  }
+
   const factionResult = getFactionResult(match);
   const gameType = match?.gameType ?? "DOUDIZHU";
   for (const player of players) {

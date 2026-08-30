@@ -2,10 +2,11 @@ import { AuthError, getPublicAccount, type PublicAccount } from "./auth.ts";
 import { kv } from "./db.ts";
 
 // 客户端每 10 秒发送一次心跳；保留约 3 次心跳的容错窗口。
-const APP_ONLINE_WINDOW_MS = 35_000;
+export const APP_HEARTBEAT_INTERVAL_MS = 10_000;
+export const APP_ONLINE_WINDOW_MS = 35_000;
 const MAX_FRIENDS = 200;
 
-interface AppPresence {
+export interface AppPresence {
   accountId: string;
   nickname: string;
   lastSeenAt: number;
@@ -46,30 +47,72 @@ export interface FriendRequestProfile {
   createdAt: number;
 }
 
-export async function touchPresence(account: PublicAccount): Promise<AppPresence> {
+export async function touchPresence(
+  account: PublicAccount,
+  sessionId = "",
+): Promise<AppPresence> {
   const presence: AppPresence = {
     accountId: account.accountId,
     nickname: account.nickname,
     lastSeenAt: Date.now(),
   };
-  await kv.set(["presence", account.accountId], presence, {
+  await kv.set(presenceKey(account.accountId, sessionId), presence, {
     expireIn: APP_ONLINE_WINDOW_MS * 2,
   });
   return presence;
 }
 
-export async function getPresence(accountId: string): Promise<AppPresence | null> {
-  const entry = await kv.get<AppPresence>(["presence", accountId]);
-  const presence = entry.value;
-  if (!presence) return null;
-  if (presence.lastSeenAt + APP_ONLINE_WINDOW_MS > Date.now()) return presence;
-  await kv.delete(entry.key);
-  return null;
+export async function clearPresence(
+  accountId: string,
+  sessionId = "",
+): Promise<void> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) return;
+  if (sessionId.trim()) {
+    await kv.delete(presenceKey(normalizedAccountId, sessionId));
+    return;
+  }
+  const keys: Deno.KvKey[] = [];
+  for await (
+    const entry of kv.list<AppPresence>({
+      prefix: ["presence", normalizedAccountId],
+    })
+  ) {
+    keys.push(entry.key);
+  }
+  for (const key of keys) await kv.delete(key);
 }
 
-export async function listAppOnlineAccounts(): Promise<OnlineAccountSnapshot[]> {
+export async function getPresence(
+  accountId: string,
+): Promise<AppPresence | null> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) return null;
   const now = Date.now();
-  const accounts: OnlineAccountSnapshot[] = [];
+  let latest: AppPresence | null = null;
+  const staleKeys: Deno.KvKey[] = [];
+  for await (
+    const entry of kv.list<AppPresence>({
+      prefix: ["presence", normalizedAccountId],
+    })
+  ) {
+    if (entry.value.lastSeenAt + APP_ONLINE_WINDOW_MS <= now) {
+      staleKeys.push(entry.key);
+      continue;
+    }
+    if (!latest || entry.value.lastSeenAt > latest.lastSeenAt) {
+      latest = entry.value;
+    }
+  }
+  for (const key of staleKeys) await kv.delete(key);
+  return latest;
+}
+
+export async function listAppOnlineAccounts(): Promise<
+  OnlineAccountSnapshot[]
+> {
+  const now = Date.now();
+  const accounts = new Map<string, OnlineAccountSnapshot>();
   const staleKeys: Deno.KvKey[] = [];
   for await (const entry of kv.list<AppPresence>({ prefix: ["presence"] })) {
     const presence = entry.value;
@@ -77,20 +120,28 @@ export async function listAppOnlineAccounts(): Promise<OnlineAccountSnapshot[]> 
       staleKeys.push(entry.key);
       continue;
     }
-    accounts.push({
+    const account: OnlineAccountSnapshot = {
       accountId: presence.accountId,
       nickname: presence.nickname,
       lastSeenAt: presence.lastSeenAt,
-    });
+    };
+    const existing = accounts.get(account.accountId);
+    if (!existing || account.lastSeenAt > existing.lastSeenAt) {
+      accounts.set(account.accountId, account);
+    }
   }
   for (const key of staleKeys) await kv.delete(key);
-  return accounts.sort((left, right) => right.lastSeenAt - left.lastSeenAt);
+  return [...accounts.values()].sort((left, right) =>
+    right.lastSeenAt - left.lastSeenAt
+  );
 }
 
 export async function listFriends(accountId: string): Promise<FriendProfile[]> {
   const records: StoredFriend[] = [];
   for await (
-    const entry of kv.list<StoredFriend>({ prefix: ["friendsByAccount", accountId] })
+    const entry of kv.list<StoredFriend>({
+      prefix: ["friendsByAccount", accountId],
+    })
   ) {
     records.push(entry.value);
   }
@@ -100,7 +151,9 @@ export async function listFriends(accountId: string): Promise<FriendProfile[]> {
     return toFriendProfile(account, record.createdAt);
   }));
   return friends.filter((friend): friend is FriendProfile => friend !== null)
-    .sort((left, right) => left.nickname.localeCompare(right.nickname, "zh-CN"));
+    .sort((left, right) =>
+      left.nickname.localeCompare(right.nickname, "zh-CN")
+    );
 }
 
 export async function listFriendRequests(
@@ -156,7 +209,11 @@ export async function sendFriendRequest(
       throw new AuthError("你们已经是好友了", "ALREADY_FRIENDS", 409);
     }
     if (existing.value?.status === "PENDING") {
-      throw new AuthError("好友申请已发送，等待对方处理", "FRIEND_REQUEST_EXISTS", 409);
+      throw new AuthError(
+        "好友申请已发送，等待对方处理",
+        "FRIEND_REQUEST_EXISTS",
+        409,
+      );
     }
   }
 
@@ -175,7 +232,11 @@ export async function sendFriendRequest(
     .set(pairKey, request.requestId)
     .commit();
   if (!result.ok) {
-    throw new AuthError("好友申请状态刚刚变化，请重试", "FRIEND_REQUEST_CHANGED", 409);
+    throw new AuthError(
+      "好友申请状态刚刚变化，请重试",
+      "FRIEND_REQUEST_CHANGED",
+      409,
+    );
   }
   return {
     requestId: request.requestId,
@@ -218,17 +279,27 @@ export async function acceptFriendRequest(
   const result = await kv.atomic()
     .check(entry)
     .set(key, updated)
-    .set(["friendsByAccount", accountId, request.fromAccountId], {
-      friendAccountId: request.fromAccountId,
-      createdAt: now,
-    } satisfies StoredFriend)
-    .set(["friendsByAccount", request.fromAccountId, accountId], {
-      friendAccountId: accountId,
-      createdAt: now,
-    } satisfies StoredFriend)
+    .set(
+      ["friendsByAccount", accountId, request.fromAccountId],
+      {
+        friendAccountId: request.fromAccountId,
+        createdAt: now,
+      } satisfies StoredFriend,
+    )
+    .set(
+      ["friendsByAccount", request.fromAccountId, accountId],
+      {
+        friendAccountId: accountId,
+        createdAt: now,
+      } satisfies StoredFriend,
+    )
     .commit();
   if (!result.ok) {
-    throw new AuthError("好友申请状态刚刚变化，请重试", "FRIEND_REQUEST_CHANGED", 409);
+    throw new AuthError(
+      "好友申请状态刚刚变化，请重试",
+      "FRIEND_REQUEST_CHANGED",
+      409,
+    );
   }
   return toFriendProfile(account, now);
 }
@@ -246,14 +317,22 @@ export async function rejectFriendRequest(
   if (request.status !== "PENDING") {
     throw new AuthError("该好友申请已经处理", "FRIEND_REQUEST_RESOLVED", 409);
   }
-  const updated = { ...request, status: "REJECTED" as const, updatedAt: Date.now() };
+  const updated = {
+    ...request,
+    status: "REJECTED" as const,
+    updatedAt: Date.now(),
+  };
   const result = await kv.atomic()
     .check(entry)
     .set(key, updated)
     .delete(friendPairKey(request.fromAccountId, request.toAccountId))
     .commit();
   if (!result.ok) {
-    throw new AuthError("好友申请状态刚刚变化，请重试", "FRIEND_REQUEST_CHANGED", 409);
+    throw new AuthError(
+      "好友申请状态刚刚变化，请重试",
+      "FRIEND_REQUEST_CHANGED",
+      409,
+    );
   }
 }
 
@@ -301,10 +380,19 @@ function friendPairKey(left: string, right: string): Deno.KvKey {
 
 async function countFriends(accountId: string): Promise<number> {
   let count = 0;
-  for await (const _entry of kv.list<StoredFriend>({
-    prefix: ["friendsByAccount", accountId],
-  })) {
+  for await (
+    const _entry of kv.list<StoredFriend>({
+      prefix: ["friendsByAccount", accountId],
+    })
+  ) {
     count += 1;
   }
   return count;
+}
+
+function presenceKey(accountId: string, sessionId: string): Deno.KvKey {
+  const normalizedSessionId = sessionId.trim();
+  return normalizedSessionId
+    ? ["presence", accountId, normalizedSessionId]
+    : ["presence", accountId];
 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -253,12 +254,14 @@ fun HomeScreen(
                         onJoinGomoku = { onJoinGomoku(gomokuRoomCode) }
                     )
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         if (selectedGame != HomeGame.DOUDIZHU) {
                             HomeGameTile(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.width(if (compact) 112.dp else 138.dp),
                                 imageRes = R.drawable.wangyouge_game_doudizhu,
                                 title = "斗地主",
                                 onClick = { selectedGame = HomeGame.DOUDIZHU }
@@ -266,21 +269,21 @@ fun HomeScreen(
                         }
                         if (selectedGame != HomeGame.GOMOKU) {
                             HomeGameTile(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.width(if (compact) 112.dp else 138.dp),
                                 imageRes = R.drawable.wangyouge_game_gomoku,
                                 title = "五子棋",
                                 onClick = { selectedGame = HomeGame.GOMOKU }
                             )
                         }
                         HomeGameTile(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.width(if (compact) 112.dp else 138.dp),
                             imageRes = R.drawable.wangyouge_game_more,
                             title = "更多小游戏",
                             enabled = false,
                             onClick = {}
                         )
                         HomeGameTile(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.width(if (compact) 112.dp else 138.dp),
                             imageRes = R.drawable.wangyouge_game_more,
                             title = "敬请期待",
                             enabled = false,
@@ -292,7 +295,8 @@ fun HomeScreen(
             Column(
                 modifier = Modifier
                     .width(toolbarWidth)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 22.dp)
             ) {

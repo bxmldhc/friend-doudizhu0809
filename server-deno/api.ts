@@ -29,6 +29,7 @@ import {
 } from "./game/store.ts";
 import {
   acceptFriendRequest,
+  clearPresence,
   listAppOnlineAccounts,
   listFriendRequests,
   listFriends,
@@ -58,16 +59,20 @@ export async function handleApiRequest(
   try {
     if (req.method === "POST" && url.pathname === "/api/auth/register") {
       const body = await readCredentials(req);
+      const session = await registerAccount(body.nickname, body.password);
+      await touchPresence(session.account, session.token);
       return json({
         ok: true,
-        data: await registerAccount(body.nickname, body.password),
+        data: session,
       });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/login") {
       const body = await readCredentials(req);
+      const session = await loginAccount(body.nickname, body.password);
+      await touchPresence(session.account, session.token);
       return json({
         ok: true,
-        data: await loginAccount(body.nickname, body.password),
+        data: session,
       });
     }
     if (req.method === "GET" && url.pathname === "/api/auth/me") {
@@ -76,12 +81,14 @@ export async function handleApiRequest(
     }
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
       const token = bearerToken(req);
+      const account = token ? await resolveSession(token) : null;
       if (token) await logoutSession(token);
+      if (account) await clearPresence(account.accountId, token);
       return json({ ok: true, data: {} });
     }
     if (req.method === "POST" && url.pathname === "/api/presence/heartbeat") {
-      const { account } = await requireAccount(req);
-      const presence = await touchPresence(account);
+      const { token, account } = await requireAccount(req);
+      const presence = await touchPresence(account, token);
       return json({
         ok: true,
         data: { online: true, lastSeenAt: presence.lastSeenAt },
@@ -145,6 +152,22 @@ export async function handleApiRequest(
       ]);
       return json({ ok: true, data: { friends, requests } });
     }
+    if (req.method === "GET" && url.pathname === "/api/friends/list") {
+      const { account } = await requireAccount(req);
+      return json({
+        ok: true,
+        data: { friends: await listFriends(account.accountId) },
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/friends/requests") {
+      const { account } = await requireAccount(req);
+      const direction = url.searchParams.get("direction")?.toUpperCase();
+      const requests = await listFriendRequests(account.accountId);
+      const filtered = direction === "INCOMING" || direction === "OUTGOING"
+        ? requests.filter((request) => request.direction === direction)
+        : requests;
+      return json({ ok: true, data: { requests: filtered } });
+    }
     if (req.method === "GET" && url.pathname === "/api/friends/search") {
       const { account } = await requireAccount(req);
       const query = url.searchParams.get("query") ?? "";
@@ -186,7 +209,10 @@ export async function handleApiRequest(
     const removeFriendMatch = url.pathname.match(/^\/api\/friends\/([^/]+)$/);
     if (req.method === "DELETE" && removeFriendMatch) {
       const { account } = await requireAccount(req);
-      await removeFriend(account.accountId, decodePathSegment(removeFriendMatch[1]));
+      await removeFriend(
+        account.accountId,
+        decodePathSegment(removeFriendMatch[1]),
+      );
       return json({ ok: true, data: {} });
     }
     if (req.method === "GET" && url.pathname === "/api/admin/overview") {
@@ -267,18 +293,38 @@ export async function handleApiRequest(
         Promise.resolve(roomManager.getAdminOnlineAccounts()),
         listAppOnlineAccounts(),
       ]);
+      const roomByNickname = new Map(
+        roomAccounts.map((account) => [account.nickname, account]),
+      );
+      const appAccountSnapshots = appAccounts.map((account) => {
+        const room = roomByNickname.get(account.nickname);
+        return {
+          nickname: account.nickname,
+          online: true as const,
+          location: room?.location ?? "APP",
+          gameType: room?.gameType ?? "",
+          roomCode: room?.roomCode ?? "",
+          lastActiveAt: Math.max(account.lastSeenAt, room?.lastActiveAt ?? 0),
+        };
+      });
+      const appNicknames = new Set(
+        appAccounts.map((account) => account.nickname),
+      );
+      const allAccounts = [
+        ...appAccountSnapshots,
+        ...roomAccounts.filter((account) =>
+          !appNicknames.has(account.nickname)
+        ),
+      ].sort((left, right) =>
+        right.lastActiveAt - left.lastActiveAt ||
+        left.nickname.localeCompare(right.nickname, "zh-CN")
+      );
       return json({
         ok: true,
         data: {
           accounts: roomAccounts,
-          appAccounts: appAccounts.map((account) => ({
-            nickname: account.nickname,
-            online: true,
-            location: "APP",
-            gameType: "",
-            roomCode: "",
-            lastActiveAt: account.lastSeenAt,
-          })),
+          appAccounts: appAccountSnapshots,
+          allAccounts,
           appOnlineCount: appAccounts.length,
           roomOnlineCount: roomAccounts.length,
         },
@@ -461,6 +507,7 @@ async function requireAccount(req: Request) {
   if (!account) {
     throw new AuthError("登录已失效，请重新登录", "AUTH_REQUIRED", 401);
   }
+  await touchPresence(account, token);
   return { token, account };
 }
 

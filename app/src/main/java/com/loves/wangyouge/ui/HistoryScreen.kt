@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -82,25 +83,20 @@ fun HistoryScreen(
                 }
                 Column {
                     Text("个人战绩", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                    Text("按游戏查看最近十场与完整胜率", color = Muted, fontSize = 13.sp)
+                    Text("选择游戏查看完整胜率与最近十场", color = Muted, fontSize = 13.sp)
                 }
             }
         }
-        item(key = "tabs") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HistoryGame.entries.forEach { game ->
-                    Surface(
-                        color = if (selectedGame == game) Color(0xFF0E5960) else HistoryPanel,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.clickable { selectedGame = game }
-                    ) {
-                        Text(
-                            game.label,
-                            color = if (selectedGame == game) Wax else Muted,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
-                        )
-                    }
+        item(key = "games") {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(HistoryGame.entries.toList(), key = { it.wire }) { game ->
+                    HistoryGameCard(
+                        game = game,
+                        stats = stats?.let { selectedStats(it, game) },
+                        selected = selectedGame == game,
+                        enabled = !loading,
+                        onClick = { selectedGame = game }
+                    )
                 }
             }
         }
@@ -115,6 +111,48 @@ fun HistoryScreen(
             items(matches, key = { "${it.gameType}-${it.matchId}" }) { match ->
                 MatchCard(match, stats?.playerId.orEmpty(), selectedGame)
             }
+        }
+    }
+}
+
+@Composable
+private fun HistoryGameCard(
+    game: HistoryGame,
+    stats: GameStats?,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val games = stats?.games ?: 0
+    val wins = stats?.wins ?: 0
+    Surface(
+        color = if (selected) Color(0xFF0E5960) else HistoryPanel,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .width(166.dp)
+            .height(104.dp)
+            .clickable(enabled = enabled, onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                game.label,
+                color = if (selected) Wax else Color.White,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                if (games > 0) "胜率 ${rate(wins, games)}%" else "暂无正式战绩",
+                color = Muted,
+                fontSize = 12.sp
+            )
+            Text(
+                if (game == HistoryGame.GOMOKU) "${games} 场对局" else "${games} 小局",
+                color = if (selected) Color.White else Muted,
+                fontSize = 12.sp
+            )
         }
     }
 }

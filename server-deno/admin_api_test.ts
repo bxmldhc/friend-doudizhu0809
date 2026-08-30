@@ -205,51 +205,64 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
       }
     });
 
-    await t.step("只有管理员能读取真实在线账号，且响应不含敏感信息", async () => {
-      const forbidden = await requestApi("/api/admin/online", {
-        token: userToken,
-      });
-      assertEquals(forbidden.response.status, 403, "普通账号在线列表状态码");
-      assertEquals(
-        forbidden.body.error?.code,
-        "ADMIN_REQUIRED",
-        "普通账号在线列表错误码",
-      );
+    await t.step(
+      "只有管理员能读取真实在线账号，且响应不含敏感信息",
+      async () => {
+        const forbidden = await requestApi("/api/admin/online", {
+          token: userToken,
+        });
+        assertEquals(forbidden.response.status, 403, "普通账号在线列表状态码");
+        assertEquals(
+          forbidden.body.error?.code,
+          "ADMIN_REQUIRED",
+          "普通账号在线列表错误码",
+        );
 
-      const online = await requestApi("/api/admin/online", {
-        token: adminToken,
-      });
-      assertEquals(online.response.status, 200, "管理员在线列表状态码");
-      const accounts = online.body.data?.accounts;
-      if (!Array.isArray(accounts) || accounts.length !== 1) {
-        throw new Error("在线账号接口没有返回预期账号");
-      }
-      const account = asRecord(accounts[0], "在线账号");
-      assertEquals(account.nickname, "管理员", "在线账号昵称");
-      assertEquals(account.online, true, "在线账号状态");
-      assertEquals(account.location, "ROOM", "在线账号位置");
-      assertEquals(account.gameType, "DOUDIZHU", "在线账号游戏类型");
-      assertEquals(account.roomCode, "123456", "在线账号房号");
-      assertEquals(
-        account.lastActiveAt,
-        1_700_000_001_000,
-        "在线账号最后活跃时间",
-      );
-      if (
-        JSON.stringify(Object.keys(account).sort()) !==
-          JSON.stringify([
-            "gameType",
-            "lastActiveAt",
-            "location",
-            "nickname",
-            "online",
-            "roomCode",
-          ])
-      ) {
-        throw new Error("在线账号接口字段必须保持最小化");
-      }
-      assertNoSecrets(online.body);
-    });
+        const online = await requestApi("/api/admin/online", {
+          token: adminToken,
+        });
+        assertEquals(online.response.status, 200, "管理员在线列表状态码");
+        const accounts = online.body.data?.accounts;
+        if (!Array.isArray(accounts) || accounts.length !== 1) {
+          throw new Error("在线账号接口没有返回预期账号");
+        }
+        const account = asRecord(accounts[0], "在线账号");
+        assertEquals(account.nickname, "管理员", "在线账号昵称");
+        assertEquals(account.online, true, "在线账号状态");
+        assertEquals(account.location, "ROOM", "在线账号位置");
+        assertEquals(account.gameType, "DOUDIZHU", "在线账号游戏类型");
+        assertEquals(account.roomCode, "123456", "在线账号房号");
+        assertEquals(
+          account.lastActiveAt,
+          1_700_000_001_000,
+          "在线账号最后活跃时间",
+        );
+        if (
+          JSON.stringify(Object.keys(account).sort()) !==
+            JSON.stringify([
+              "gameType",
+              "lastActiveAt",
+              "location",
+              "nickname",
+              "online",
+              "roomCode",
+            ])
+        ) {
+          throw new Error("在线账号接口字段必须保持最小化");
+        }
+        assertNoSecrets(online.body);
+        const appAccounts = online.body.data?.appAccounts;
+        const allAccounts = online.body.data?.allAccounts;
+        if (!Array.isArray(appAccounts) || appAccounts.length < 2) {
+          throw new Error("应用在线列表没有包含已认证账号");
+        }
+        if (
+          !Array.isArray(allAccounts) || allAccounts.length < appAccounts.length
+        ) {
+          throw new Error("统一在线列表没有完整保留应用在线账号");
+        }
+      },
+    );
 
     await t.step("账号列表最多返回 100 条并支持 query", async () => {
       const accounts = await requestApi(
@@ -606,6 +619,7 @@ Deno.test("管理员 API 权限、查询和密码重置保持安全边界", asyn
       for (const token of account.tokens) {
         await kv.delete(["sessions", token]);
       }
+      await kv.delete(["presence", account.accountId]);
       await kv.delete(["accounts", account.accountId]);
       await kv.delete(["accountByNickname", account.nicknameKey]);
       await kv.delete(["players", account.accountId]);

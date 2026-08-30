@@ -64,6 +64,7 @@ Deno.test("recordGame 按地主和农民阵营累计局数与胜场", async () =
 
 Deno.test("旧 KV 统计缺少阵营字段时按零兼容", async () => {
   const playerId = testPlayerId("legacy");
+  const farmerId = testPlayerId("legacy-farmer");
   const legacyStats = {
     playerId,
     name: "旧玩家",
@@ -83,10 +84,10 @@ Deno.test("旧 KV 统计缺少阵营字段时按零兼容", async () => {
 
     const match = factionContext(
       playerId,
-      testPlayerId("legacy-farmer"),
+      farmerId,
       playerId,
     );
-    await recordGame([match.round.players[0]], match);
+    await recordGame(match.round.players, match);
     const after = await getStats(playerId);
     assertEquals(after?.totalScore, 9, "旧数据总分");
     assertEquals(after?.games, 4, "旧数据总局数");
@@ -97,16 +98,18 @@ Deno.test("旧 KV 统计缺少阵营字段时按零兼容", async () => {
       "旧数据更新",
     );
   } finally {
-    await cleanupPlayers(playerId);
+    await cleanupPlayers(playerId, farmerId);
   }
 });
 
 Deno.test("recordGame 没有 match 时保留总统计但不累计阵营分项", async () => {
   const playerId = testPlayerId("no-match");
+  const secondPlayerId = testPlayerId("no-match-second");
 
   try {
     await recordGame([
       { playerId, name: "无场次玩家", delta: 3, isAi: false },
+      { playerId: secondPlayerId, name: "第二位玩家", delta: -3, isAi: false },
     ]);
     const stats = await getStats(playerId);
     assertEquals(stats?.games, 1, "无场次总局数");
@@ -117,18 +120,27 @@ Deno.test("recordGame 没有 match 时保留总统计但不累计阵营分项", 
       "无场次阵营统计",
     );
   } finally {
-    await cleanupPlayers(playerId);
+    await cleanupPlayers(playerId, secondPlayerId);
   }
 });
 
 Deno.test("recordGame 的地主 ID 不属于该局玩家时不累计阵营分项", async () => {
   const playerId = testPlayerId("invalid-landlord");
+  const secondPlayerId = testPlayerId("invalid-landlord-second");
   const match = factionContext(
     testPlayerId("missing-landlord"),
     playerId,
     playerId,
   );
-  match.round.players = [match.round.players[1]];
+  match.round.players = [
+    match.round.players[1],
+    {
+      playerId: secondPlayerId,
+      name: "第二位玩家",
+      delta: -1,
+      isAi: false,
+    },
+  ];
 
   try {
     await recordGame(match.round.players, match);
@@ -140,11 +152,11 @@ Deno.test("recordGame 的地主 ID 不属于该局玩家时不累计阵营分项
       "无效地主阵营统计",
     );
   } finally {
-    await cleanupPlayers(playerId);
+    await cleanupPlayers(playerId, secondPlayerId);
   }
 });
 
-Deno.test("recordGame 不为 AI 创建个人统计", async () => {
+Deno.test("recordGame 单真人对 AI 不创建个人统计", async () => {
   const humanId = testPlayerId("human");
   const aiId = testPlayerId("ai");
   const match = factionContext(aiId, humanId, humanId, true);
@@ -153,15 +165,35 @@ Deno.test("recordGame 不为 AI 创建个人统计", async () => {
     await recordGame(match.round.players, match);
     const human = await getStats(humanId);
     const ai = await getStats(aiId);
-    assertStats(
-      human,
-      { landlordGames: 0, landlordWins: 0, farmerGames: 1, farmerWins: 1 },
-      "真人农民统计",
-    );
-    assertEquals(human?.wins, 0, "兼容总胜场仍按 delta");
+    assertEquals(human, null, "单真人战绩");
     assertEquals(ai, null, "AI 统计");
   } finally {
     await cleanupPlayers(humanId, aiId);
+  }
+});
+
+Deno.test("recordGame 两名真人加 AI 时正常记录真人", async () => {
+  const humanId = testPlayerId("two-human");
+  const secondHumanId = testPlayerId("two-human-second");
+  const aiId = testPlayerId("two-human-ai");
+  const match = factionContext(aiId, humanId, humanId, true);
+  match.round.players.push({
+    playerId: secondHumanId,
+    name: "第二位真人",
+    delta: -1,
+    isAi: false,
+  });
+
+  try {
+    await recordGame(match.round.players, match);
+    const human = await getStats(humanId);
+    const secondHuman = await getStats(secondHumanId);
+    const ai = await getStats(aiId);
+    assertEquals(human?.games, 1, "第一位真人局数");
+    assertEquals(secondHuman?.games, 1, "第二位真人局数");
+    assertEquals(ai, null, "AI 统计");
+  } finally {
+    await cleanupPlayers(humanId, secondHumanId, aiId);
   }
 });
 

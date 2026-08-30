@@ -294,10 +294,29 @@ private fun AddFriendPanel(
 
 @Composable
 private fun FriendError(message: String) {
-    Text(
-        "操作失败：$message",
-        color = Color(0xFFF28B78),
-        fontSize = 13.sp,
-        modifier = Modifier.padding(horizontal = 2.dp, vertical = 2.dp)
-    )
+    val isServerFeatureUnavailable = message.contains("接口不存在")
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (isServerFeatureUnavailable) Color(0xFF203B43) else Color(0xFF482B2D),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+            Text(
+                if (isServerFeatureUnavailable) "好友功能暂时不可用" else "操作暂未完成",
+                color = if (isServerFeatureUnavailable) FriendsWax else Color(0xFFF28B78),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                if (isServerFeatureUnavailable) {
+                    "当前连接的服务器还没有好友接口。请更新服务器后点击右上角刷新。"
+                } else {
+                    message
+                },
+                color = FriendsMuted,
+                fontSize = 12.sp
+            )
+        }
+    }
 }

@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -322,54 +320,64 @@ fun GomokuGameScreen(
         game.phase == GomokuPhase.PLAYING &&
         game.turnIndex == state.mySeat
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(GomokuPage).padding(12.dp)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(GomokuPage).padding(8.dp)) {
         val compact = maxHeight < 480.dp || maxWidth < 820.dp
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            GomokuTopBar(
-                roomCode = state.roomCode,
-                gameNumber = game.gameNumber,
-                connection = state.connection,
-                onExit = { showExitConfirm = true },
-                onQuickMessage = { showQuickMessages = true }
-            )
-            Row(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 14.dp),
-                verticalAlignment = Alignment.CenterVertically
+        val sidePanelWidth = if (compact) 84.dp else 96.dp
+        val boardSize = minOf(
+            maxHeight,
+            maxWidth
+        ).coerceAtLeast(0.dp)
+
+        // 棋盘优先占满短边，玩家信息悬浮在两侧而不再挤占落子区域。
+        GomokuBoardCanvas(
+            board = game.board,
+            winningLine = game.winningLine.map { it.row to it.col }.toSet(),
+            enabled = canMove,
+            onMove = onMove,
+            modifier = Modifier
+                .size(boardSize)
+                .align(Alignment.Center)
+        )
+        GomokuPlayerPanel(
+            seat = game.seats.getOrNull(0),
+            fallback = state.players.getOrElse(0) { "黑方" },
+            isCurrent = game.phase == GomokuPhase.PLAYING && game.turnIndex == 0,
+            isReady = game.readySeats.getOrElse(0) { false },
+            onClick = { onPlayerProfile(0) },
+            modifier = Modifier
+                .width(sidePanelWidth)
+                .heightIn(max = if (compact) 150.dp else 180.dp)
+                .padding(start = 2.dp)
+                .align(Alignment.CenterStart)
+        )
+        GomokuPlayerPanel(
+            seat = game.seats.getOrNull(1),
+            fallback = state.players.getOrElse(1) { "白方" },
+            isCurrent = game.phase == GomokuPhase.PLAYING && game.turnIndex == 1,
+            isReady = game.readySeats.getOrElse(1) { false },
+            onClick = { onPlayerProfile(1) },
+            modifier = Modifier
+                .width(sidePanelWidth)
+                .heightIn(max = if (compact) 150.dp else 180.dp)
+                .padding(end = 2.dp)
+                .align(Alignment.CenterEnd)
+        )
+        GomokuTopBar(
+            roomCode = state.roomCode,
+            gameNumber = game.gameNumber,
+            connection = state.connection,
+            onExit = { showExitConfirm = true },
+            onQuickMessage = { showQuickMessages = true },
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+        if (game.phase == GomokuPhase.PLAYING) {
+            Surface(
+                color = GomokuSurface.copy(alpha = 0.94f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                GomokuPlayerPanel(
-                    seat = game.seats.getOrNull(0),
-                    fallback = state.players.getOrElse(0) { "黑方" },
-                    isCurrent = game.phase == GomokuPhase.PLAYING && game.turnIndex == 0,
-                    isReady = game.readySeats.getOrElse(0) { false },
-                    onClick = { onPlayerProfile(0) },
-                    modifier = Modifier.weight(0.48f).fillMaxHeight()
-                )
-                Box(
-                    modifier = Modifier.weight(2.2f).fillMaxHeight(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    GomokuBoardCanvas(
-                        board = game.board,
-                        winningLine = game.winningLine.map { it.row to it.col }.toSet(),
-                        enabled = canMove,
-                        onMove = onMove,
-                        modifier = Modifier.fillMaxHeight(0.99f).aspectRatio(1f)
-                    )
-                }
-                GomokuPlayerPanel(
-                    seat = game.seats.getOrNull(1),
-                    fallback = state.players.getOrElse(1) { "白方" },
-                    isCurrent = game.phase == GomokuPhase.PLAYING && game.turnIndex == 1,
-                    isReady = game.readySeats.getOrElse(1) { false },
-                    onClick = { onPlayerProfile(1) },
-                    modifier = Modifier.weight(0.48f).fillMaxHeight()
-                )
-            }
-            if (game.phase == GomokuPhase.PLAYING) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -378,24 +386,25 @@ fun GomokuGameScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     if (state.connection != AppConnectionState.ONLINE) {
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(10.dp))
                         TextButton(onClick = onRetry) { Text("重新连接") }
                     }
                 }
-            } else {
-                GomokuFinishedBar(
-                    state = state,
-                    onReady = onReady,
-                    onRestart = onRestart
-                )
             }
-            if (state.isHost) {
-                TextButton(
-                    onClick = { showDisbandConfirm = true },
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text("解散房间", color = GomokuMuted, fontSize = 12.sp)
-                }
+        } else {
+            GomokuFinishedBar(
+                state = state,
+                onReady = onReady,
+                onRestart = onRestart,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+        if (state.isHost) {
+            TextButton(
+                onClick = { showDisbandConfirm = true },
+                modifier = Modifier.align(Alignment.BottomEnd)
+            ) {
+                Text("解散房间", color = GomokuMuted, fontSize = 12.sp)
             }
         }
         quickMessage?.let {
@@ -440,10 +449,11 @@ private fun GomokuTopBar(
     gameNumber: Int?,
     connection: AppConnectionState,
     onExit: () -> Unit,
-    onQuickMessage: (() -> Unit)? = null
+    onQuickMessage: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+        modifier = modifier.fillMaxWidth().heightIn(min = 44.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(onClick = onExit) {
@@ -552,7 +562,7 @@ private fun GomokuBoardCanvas(
             .clip(RoundedCornerShape(6.dp))
             .background(GomokuBoard)
             .border(2.dp, GomokuGrid, RoundedCornerShape(6.dp))
-            .padding(10.dp)
+            .padding(4.dp)
             .fillMaxSize()
             .pointerInput(enabled, board) {
                 detectTapGestures { tap ->
@@ -628,7 +638,8 @@ private fun GomokuBoardCanvas(
 private fun GomokuFinishedBar(
     state: GameUiState.GomokuPlaying,
     onReady: (Boolean) -> Unit,
-    onRestart: () -> Unit
+    onRestart: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val game = state.state
     val result = when (game.winnerIndex) {
@@ -637,7 +648,7 @@ private fun GomokuFinishedBar(
         else -> "本局失利"
     }
     val ready = game.readySeats.getOrElse(state.mySeat) { false }
-    Surface(color = GomokuSurface, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = GomokuSurface, shape = RoundedCornerShape(8.dp), modifier = modifier) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -651,22 +662,31 @@ private fun GomokuFinishedBar(
                 fontSize = 12.sp
             )
             Spacer(Modifier.weight(1f))
-            if (!ready) {
+            if (game.seats.getOrNull(state.mySeat)?.isAi == true) {
+                Text("AI 已准备", color = Color(0xFF7ED9A3), fontSize = 12.sp)
+            } else {
                 Button(
-                    onClick = { onReady(true) },
+                    onClick = { onReady(!ready) },
                     colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
                 ) {
-                    Text("准备下一局")
+                    Text(if (ready) "取消准备" else "准备下一局")
                 }
-            } else if (state.isHost && game.readySeats.all { it }) {
+            }
+            if (state.isHost) {
                 Button(
                     onClick = onRestart,
-                    colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
+                    enabled = game.readySeats.all { it },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = GomokuCoral,
+                        disabledContainerColor = GomokuSurface
+                    )
                 ) {
-                    Text("开始下一局")
+                    Text(if (game.readySeats.all { it }) "开始下一局" else "等待双方准备")
                 }
-            } else {
+            } else if (ready) {
                 Text("已准备，等待对方", color = GomokuMuted, fontSize = 12.sp)
+            } else {
+                Text("准备后等待房主开始", color = GomokuMuted, fontSize = 12.sp)
             }
         }
     }

@@ -79,10 +79,16 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
     });
 
     await t.step("stats are bound to the immutable accountId", async () => {
+      const secondPlayerId = `test-opponent-${crypto.randomUUID()}`;
       await recordGame([{
         playerId: accountId,
         name: nickname,
         delta: 6,
+        isAi: false,
+      }, {
+        playerId: secondPlayerId,
+        name: "测试对手",
+        delta: -6,
         isAi: false,
       }], {
         matchId: `match-${crypto.randomUUID()}`,
@@ -98,6 +104,11 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
             playerId: accountId,
             name: nickname,
             delta: 6,
+            isAi: false,
+          }, {
+            playerId: secondPlayerId,
+            name: "测试对手",
+            delta: -6,
             isAi: false,
           }],
         },
@@ -146,7 +157,34 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
             name: otherNickname,
             delta: -4,
             isAi: false,
-          }]);
+          }, {
+            playerId: accountId,
+            name: nickname,
+            delta: 4,
+            isAi: false,
+          }], {
+            matchId: `match-${crypto.randomUUID()}`,
+            roomCode: "654321",
+            startedAt: Date.now(),
+            round: {
+              gameNumber: 1,
+              finishedAt: Date.now(),
+              winnerPlayerId: otherAccountId,
+              landlordPlayerId: otherAccountId,
+              multiplier: 1,
+              players: [{
+                playerId: otherAccountId,
+                name: otherNickname,
+                delta: -4,
+                isAi: false,
+              }, {
+                playerId: accountId,
+                name: nickname,
+                delta: 4,
+                isAi: false,
+              }],
+            },
+          });
 
           const { response, body } = await requestApi(
             `/api/players/${encodeURIComponent(otherAccountId)}/stats`,
@@ -198,6 +236,7 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
         } finally {
           if (otherToken) await kv.delete(["sessions", otherToken]);
           if (otherAccountId) {
+            await kv.delete(["presence", otherAccountId]);
             await kv.delete(["accounts", otherAccountId]);
             await kv.delete(["players", otherAccountId]);
           }
@@ -345,6 +384,7 @@ Deno.test("REST account API routes preserve identity and session boundaries", as
   } finally {
     if (token) await kv.delete(["sessions", token]);
     if (accountId) {
+      await kv.delete(["presence", accountId]);
       await kv.delete(["accounts", accountId]);
       await kv.delete(["players", accountId]);
     }

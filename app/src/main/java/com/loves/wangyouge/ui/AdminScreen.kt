@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -36,7 +37,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -112,24 +113,26 @@ fun AdminScreen(
 
         state.overview?.let { overview ->
             item(key = "overview") {
-                Row(
+                LazyRow(
                     modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(end = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    SummaryTile("账号", overview.accountCount.toString(), Modifier.weight(1f))
-                    SummaryTile("房间", overview.roomCount.toString(), Modifier.weight(1f))
-                    SummaryTile("应用在线", overview.appOnlineCount.toString(), Modifier.weight(1f))
-                    SummaryTile("在线真人", overview.connectedHumanCount.toString(), Modifier.weight(1f))
-                    SummaryTile("进行中", overview.activeGameCount.toString(), Modifier.weight(1f))
+                    item { SummaryTile("账号", overview.accountCount.toString(), Modifier.width(112.dp)) }
+                    item { SummaryTile("房间", overview.roomCount.toString(), Modifier.width(112.dp)) }
+                    item { SummaryTile("应用在线", overview.appOnlineCount.toString(), Modifier.width(126.dp)) }
+                    item { SummaryTile("在线真人", overview.connectedHumanCount.toString(), Modifier.width(126.dp)) }
+                    item { SummaryTile("进行中", overview.activeGameCount.toString(), Modifier.width(112.dp)) }
                 }
             }
         }
 
         item(key = "tabs") {
-            TabRow(
+            ScrollableTabRow(
                 selectedTabIndex = selectedTab,
                 containerColor = AdminPanel,
-                contentColor = AdminWax
+                contentColor = AdminWax,
+                edgePadding = 4.dp
             ) {
                 Tab(selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("账号管理") })
                 Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("在线账号") })
@@ -259,11 +262,10 @@ fun AdminScreen(
             }
             selectedTab == 1 -> {
                 item(key = "app-online-title") {
-                    Text(
-                        "应用在线 · 最近 150 秒有心跳（${state.appOnlineCount}）",
-                        color = AdminWax,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
+                    OnlineSectionTitle(
+                        title = "应用在线",
+                        count = state.appOnlineCount,
+                        detail = "已打开应用，且仍在服务端的最近活跃记录中"
                     )
                 }
                 items(
@@ -278,11 +280,10 @@ fun AdminScreen(
                     }
                 }
                 item(key = "room-online-title") {
-                    Text(
-                        "房间内在线 · ${state.roomOnlineCount}",
-                        color = AdminWax,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
+                    OnlineSectionTitle(
+                        title = "房间内在线",
+                        count = state.roomOnlineCount,
+                        detail = "当前仍连接在游戏房间中的真人玩家"
                     )
                 }
                 items(
@@ -360,9 +361,9 @@ private fun OnlineAccountRow(account: AdminOnlineAccount) {
                 Text(account.nickname, color = Color.White, fontWeight = FontWeight.Bold)
                 Text(
                     if (account.location == "APP") {
-                        "应用内在线 · 最近心跳 ${formatTime(account.lastActiveAt)}"
+                        "应用内活动 · 最近活跃 ${formatActiveTime(account.lastActiveAt)}"
                     } else {
-                        "${if (account.gameType == "GOMOKU") "五子棋" else "斗地主"} · 房间 ${account.roomCode}"
+                        "${if (account.gameType == "GOMOKU") "五子棋" else "斗地主"} · 房间 ${account.roomCode} · 最近活跃 ${formatActiveTime(account.lastActiveAt)}"
                     },
                     color = AdminMuted,
                     fontSize = 11.sp
@@ -375,6 +376,20 @@ private fun OnlineAccountRow(account: AdminOnlineAccount) {
                 fontWeight = FontWeight.SemiBold
             )
         }
+    }
+}
+
+@Composable
+private fun OnlineSectionTitle(title: String, count: Int, detail: String) {
+    Column {
+        Text(
+            "$title · $count",
+            color = AdminWax,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(detail, color = AdminMuted, fontSize = 11.sp)
     }
 }
 
@@ -714,6 +729,17 @@ private fun winRate(wins: Int, games: Int): String {
 private fun formatTime(timestamp: Long): String {
     if (timestamp <= 0L) return "未知"
     return SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(timestamp))
+}
+
+private fun formatActiveTime(timestamp: Long): String {
+    if (timestamp <= 0L) return "未知"
+    val elapsed = (System.currentTimeMillis() - timestamp).coerceAtLeast(0L)
+    return when {
+        elapsed < 60_000L -> "刚刚"
+        elapsed < 3_600_000L -> "${elapsed / 60_000L} 分钟前"
+        elapsed < 86_400_000L -> "${elapsed / 3_600_000L} 小时前"
+        else -> formatTime(timestamp)
+    }
 }
 
 private fun phaseText(phase: String): String = when (phase.uppercase()) {
