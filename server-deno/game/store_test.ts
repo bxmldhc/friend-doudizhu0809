@@ -1,14 +1,15 @@
 import {
+  getRecentMatches,
   getStats,
   MatchContext,
   mergeRecentMatch,
-  PlayerStats,
+  PlayerScoreDelta,
   RecentMatch,
   recordGame,
 } from "./store.ts";
 import { kv } from "./db.ts";
 
-Deno.test("同一房间的小局聚合为一场并按局号排列", () => {
+Deno.test("同一场的不同小局合并并按局号排序", () => {
   let matches = mergeRecentMatch([], context("match-a", 2, 200));
   matches = mergeRecentMatch(matches, context("match-a", 1, 100));
 
@@ -20,275 +21,270 @@ Deno.test("同一房间的小局聚合为一场并按局号排列", () => {
   );
 });
 
-Deno.test("最近战绩只保留十场且相同小局不会重复", () => {
-  let matches: RecentMatch[] = [];
-  for (let index = 0; index < 12; index++) {
-    matches = mergeRecentMatch(
-      matches,
-      context(`match-${index}`, 1, index + 1),
-    );
-  }
-  assertEquals(matches.length, 10, "最近场次数量");
-  assertEquals(matches[0].matchId, "match-11", "最新场次");
-  assertEquals(matches.at(-1)?.matchId, "match-2", "最早保留场次");
-
-  matches = mergeRecentMatch(matches, context("match-11", 1, 99));
-  assertEquals(matches[0].rounds.length, 1, "重复小局数量");
-  assertEquals(matches[0].rounds[0].finishedAt, 99, "重复小局更新");
-});
-
-Deno.test("recordGame 按地主和农民阵营累计局数与胜场", async () => {
-  const landlordId = testPlayerId("landlord");
-  const farmerId = testPlayerId("farmer");
-  const match = factionContext(landlordId, farmerId, landlordId);
-
-  try {
-    await recordGame(match.round.players, match);
-
-    const landlord = await getStats(landlordId);
-    const farmer = await getStats(farmerId);
-    assertStats(
-      landlord,
-      { landlordGames: 1, landlordWins: 1, farmerGames: 0, farmerWins: 0 },
-      "地主统计",
-    );
-    assertStats(
-      farmer,
-      { landlordGames: 0, landlordWins: 0, farmerGames: 1, farmerWins: 0 },
-      "农民统计",
-    );
-  } finally {
-    await cleanupPlayers(landlordId, farmerId);
-  }
-});
-
-Deno.test("旧 KV 统计缺少阵营字段时按零兼容", async () => {
-  const playerId = testPlayerId("legacy");
-  const farmerId = testPlayerId("legacy-farmer");
-  const legacyStats = {
-    playerId,
-    name: "旧玩家",
-    totalScore: 7,
-    games: 3,
-    wins: 2,
-  };
-
-  try {
-    await kv.set(["players", playerId], legacyStats);
-    const before = await getStats(playerId);
-    assertStats(
-      before,
-      { landlordGames: 0, landlordWins: 0, farmerGames: 0, farmerWins: 0 },
-      "旧数据读取",
-    );
-
-    const match = factionContext(
-      playerId,
-      farmerId,
-      playerId,
-    );
-    await recordGame(match.round.players, match);
-    const after = await getStats(playerId);
-    assertEquals(after?.totalScore, 9, "旧数据总分");
-    assertEquals(after?.games, 4, "旧数据总局数");
-    assertEquals(after?.wins, 3, "旧数据总胜场");
-    assertStats(
-      after,
-      { landlordGames: 1, landlordWins: 1, farmerGames: 0, farmerWins: 0 },
-      "旧数据更新",
-    );
-  } finally {
-    await cleanupPlayers(playerId, farmerId);
-  }
-});
-
-Deno.test("recordGame 没有 match 时保留总统计但不累计阵营分项", async () => {
-  const playerId = testPlayerId("no-match");
-  const secondPlayerId = testPlayerId("no-match-second");
-
-  try {
-    await recordGame([
-      { playerId, name: "无场次玩家", delta: 3, isAi: false },
-      { playerId: secondPlayerId, name: "第二位玩家", delta: -3, isAi: false },
-    ]);
-    const stats = await getStats(playerId);
-    assertEquals(stats?.games, 1, "无场次总局数");
-    assertEquals(stats?.wins, 1, "无场次总胜场");
-    assertStats(
-      stats,
-      { landlordGames: 0, landlordWins: 0, farmerGames: 0, farmerWins: 0 },
-      "无场次阵营统计",
-    );
-  } finally {
-    await cleanupPlayers(playerId, secondPlayerId);
-  }
-});
-
-Deno.test("recordGame 的地主 ID 不属于该局玩家时不累计阵营分项", async () => {
-  const playerId = testPlayerId("invalid-landlord");
-  const secondPlayerId = testPlayerId("invalid-landlord-second");
-  const match = factionContext(
-    testPlayerId("missing-landlord"),
-    playerId,
-    playerId,
+Deno.test("单真人对 AI 不会写入统计或最近战绩", async () => {
+  const humanId = testPlayerId("solo-human");
+  const aiId = testPlayerId("solo-ai");
+  const match = createMatch(
+    [human(humanId, "真人", 1), ai(aiId, "AI", -1)],
+    humanId,
   );
-  match.round.players = [
-    match.round.players[1],
-    {
-      playerId: secondPlayerId,
-      name: "第二位玩家",
-      delta: -1,
-      isAi: false,
-    },
-  ];
-
   try {
     await recordGame(match.round.players, match);
-    const stats = await getStats(playerId);
-    assertEquals(stats?.games, 1, "无效地主总局数");
-    assertStats(
-      stats,
-      { landlordGames: 0, landlordWins: 0, farmerGames: 0, farmerWins: 0 },
-      "无效地主阵营统计",
-    );
+    assertEquals(await getStats(humanId), null, "单真人统计");
+    assertEquals((await getRecentMatches(humanId)).length, 0, "单真人历史");
   } finally {
-    await cleanupPlayers(playerId, secondPlayerId);
+    await cleanup(humanId, aiId);
   }
 });
 
-Deno.test("recordGame 单真人对 AI 不创建个人统计", async () => {
-  const humanId = testPlayerId("human");
-  const aiId = testPlayerId("ai");
-  const match = factionContext(aiId, humanId, humanId, true);
-
+Deno.test("没有场次上下文的兼容入口只写聚合统计，不写最近战绩", async () => {
+  const firstId = testPlayerId("no-context-first");
+  const secondId = testPlayerId("no-context-second");
   try {
-    await recordGame(match.round.players, match);
-    const human = await getStats(humanId);
-    const ai = await getStats(aiId);
-    assertEquals(human, null, "单真人战绩");
-    assertEquals(ai, null, "AI 统计");
+    await recordGame([human(firstId, "甲", 2), human(secondId, "乙", -2)]);
+    const result = await getStats(firstId);
+    assertEquals(result?.games, 1, "无场次聚合统计");
+    assertEquals((await getRecentMatches(firstId)).length, 0, "无场次不写历史");
   } finally {
-    await cleanupPlayers(humanId, aiId);
+    await cleanup(firstId, secondId);
   }
 });
 
-Deno.test("recordGame 两名真人加 AI 时正常记录真人", async () => {
-  const humanId = testPlayerId("two-human");
-  const secondHumanId = testPlayerId("two-human-second");
+Deno.test("两名已登录真人参与时只记录真人，并保持分类统计", async () => {
+  const firstId = testPlayerId("two-human-first");
+  const secondId = testPlayerId("two-human-second");
   const aiId = testPlayerId("two-human-ai");
-  const match = factionContext(aiId, humanId, humanId, true);
-  match.round.players.push({
-    playerId: secondHumanId,
-    name: "第二位真人",
-    delta: -1,
-    isAi: false,
-  });
-
+  const match = createMatch(
+    [
+      human(firstId, "甲", 2),
+      human(secondId, "乙", -1),
+      ai(aiId, "AI", -1),
+    ],
+    firstId,
+  );
   try {
     await recordGame(match.round.players, match);
-    const human = await getStats(humanId);
-    const secondHuman = await getStats(secondHumanId);
-    const ai = await getStats(aiId);
-    assertEquals(human?.games, 1, "第一位真人局数");
-    assertEquals(secondHuman?.games, 1, "第二位真人局数");
-    assertEquals(ai, null, "AI 统计");
+    const first = await getStats(firstId);
+    const second = await getStats(secondId);
+    assertEquals(first?.games, 1, "甲总局数");
+    assertEquals(first?.gameStats?.DOUDIZHU?.games, 1, "甲斗地主局数");
+    assertEquals(first?.landlordGames, 1, "甲地主局数");
+    assertEquals(first?.landlordWins, 1, "甲地主胜场");
+    assertEquals(second?.farmerGames, 1, "乙农民局数");
+    assertEquals(await getStats(aiId), null, "AI 无个人统计");
   } finally {
-    await cleanupPlayers(humanId, secondHumanId, aiId);
+    await cleanup(firstId, secondId, aiId);
   }
 });
 
-Deno.test("分类战绩分别累计斗地主和五子棋", async () => {
-  const playerId = testPlayerId("game-stats");
-  const farmerId = testPlayerId("game-stats-farmer");
-  const doudizhu = factionContext(playerId, farmerId, playerId);
-  const gomoku: MatchContext = {
+Deno.test("分类战绩会跨场次累计并正确汇总到总战绩", async () => {
+  const firstId = testPlayerId("cumulative-first");
+  const secondId = testPlayerId("cumulative-second");
+  const thirdId = testPlayerId("cumulative-third");
+  const first = human(firstId, "甲", 2);
+  const second = human(secondId, "乙", -2);
+  const third = human(thirdId, "丙", -1);
+  const doudizhuOne = createMatch([first, second], firstId);
+  const doudizhuTwo = {
+    ...doudizhuOne,
     matchId: crypto.randomUUID(),
-    roomCode: "654321",
-    startedAt: 3,
-    gameType: "GOMOKU",
+    round: { ...doudizhuOne.round, gameNumber: 1, players: [
+      human(firstId, "甲", 3),
+      human(secondId, "乙", -3),
+    ] },
+  };
+  const gomoku = {
+    ...doudizhuOne,
+    matchId: crypto.randomUUID(),
+    gameType: "GOMOKU" as const,
+    round: {
+      ...doudizhuOne.round,
+      players: [human(firstId, "甲", -1), third],
+    },
+  };
+  try {
+    await recordGame(doudizhuOne.round.players, doudizhuOne);
+    await recordGame(doudizhuTwo.round.players, doudizhuTwo);
+    await recordGame(gomoku.round.players, gomoku);
+    const result = await getStats(firstId);
+    assertEquals(result?.gameStats?.DOUDIZHU?.games, 2, "斗地主局数累计");
+    assertEquals(result?.gameStats?.DOUDIZHU?.totalScore, 5, "斗地主分数累计");
+    assertEquals(result?.gameStats?.GOMOKU?.games, 1, "五子棋局数累计");
+    assertEquals(result?.gameStats?.GOMOKU?.totalScore, -1, "五子棋分数累计");
+    assertEquals(result?.games, 3, "总局数累计");
+    assertEquals(result?.totalScore, 4, "总分累计");
+  } finally {
+    await cleanup(firstId, secondId, thirdId);
+  }
+});
+
+Deno.test("总战绩仅从 gameStats 聚合，不混用旧顶层字段", async () => {
+  const playerId = testPlayerId("aggregate");
+  try {
+    await kv.set(["players", playerId], {
+      playerId,
+      name: "旧玩家",
+      totalScore: 999,
+      games: 99,
+      wins: 88,
+      landlordGames: 77,
+      landlordWins: 66,
+      farmerGames: 55,
+      farmerWins: 44,
+      gameStats: {
+        DOUDIZHU: stats(8, 2, 1, 1, 1, 1, 0),
+        GOMOKU: stats(-1, 3, 1),
+      },
+    });
+
+    const result = await getStats(playerId);
+    assertEquals(result?.totalScore, 7, "总分");
+    assertEquals(result?.games, 5, "总局数");
+    assertEquals(result?.wins, 2, "总胜场");
+    assertEquals(result?.landlordGames, 1, "地主局数");
+    assertEquals(result?.farmerGames, 1, "农民局数");
+  } finally {
+    await cleanup(playerId);
+  }
+});
+
+Deno.test("无 gameStats 的旧顶层字段不会作为可见统计返回", async () => {
+  const playerId = testPlayerId("legacy");
+  try {
+    await kv.set(["players", playerId], {
+      playerId,
+      name: "旧玩家",
+      totalScore: 50,
+      games: 9,
+      wins: 8,
+      landlordGames: 5,
+      landlordWins: 4,
+      farmerGames: 4,
+      farmerWins: 4,
+    });
+
+    const result = await getStats(playerId);
+    assertEquals(result?.totalScore, 0, "旧总分");
+    assertEquals(result?.games, 0, "旧局数");
+    assertEquals(Object.keys(result?.gameStats ?? {}).length, 0, "分类统计");
+  } finally {
+    await cleanup(playerId);
+  }
+});
+
+Deno.test("最近战绩会过滤旧的单真人陪练和不可信玩家标识", async () => {
+  const firstId = testPlayerId("history-first");
+  const secondId = testPlayerId("history-second");
+  const aiId = testPlayerId("history-ai");
+  const valid = createMatch(
+    [human(firstId, "甲", 1), human(secondId, "乙", -1)],
+    firstId,
+  );
+  const solo = createMatch(
+    [human(firstId, "甲", 1), ai(aiId, "AI", -1)],
+    firstId,
+  );
+  const untrusted: RecentMatch = {
+    matchId: crypto.randomUUID(),
+    roomCode: "111111",
+    startedAt: 1,
+    updatedAt: 3,
+    gameType: "DOUDIZHU",
+    rounds: [{
+      ...valid.round,
+      gameNumber: 2,
+      players: valid.round.players.map((player) => ({
+        ...player,
+        isAi: undefined as unknown as boolean,
+      })),
+    }],
+  };
+  try {
+    await kv.set(["recentMatches", firstId], [
+      toRecentMatch(valid),
+      toRecentMatch(solo),
+      untrusted,
+    ]);
+    const matches = await getRecentMatches(firstId);
+    assertEquals(matches.length, 1, "仅保留可信真人对局");
+    assertEquals(matches[0].matchId, valid.matchId, "保留的场次");
+  } finally {
+    await cleanup(firstId, secondId, aiId);
+  }
+});
+
+function createMatch(
+  players: PlayerScoreDelta[],
+  winnerPlayerId: string,
+): MatchContext {
+  return {
+    matchId: crypto.randomUUID(),
+    roomCode: "123456",
+    startedAt: 1,
+    gameType: "DOUDIZHU",
     round: {
       gameNumber: 1,
-      finishedAt: 4,
-      winnerPlayerId: playerId,
-      landlordPlayerId: null,
+      finishedAt: 2,
+      winnerPlayerId,
+      landlordPlayerId: players[0]?.playerId ?? null,
       multiplier: 1,
-      players: [
-        { playerId, name: "五子棋玩家", delta: 1, isAi: false },
-        { playerId: farmerId, name: "对手", delta: -1, isAi: false },
-      ],
+      players,
     },
   };
-
-  try {
-    await recordGame(doudizhu.round.players, doudizhu);
-    await recordGame(gomoku.round.players, gomoku);
-    const stats = await getStats(playerId);
-    assertEquals(stats?.gameStats?.DOUDIZHU?.games, 1, "斗地主分类局数");
-    assertEquals(stats?.gameStats?.DOUDIZHU?.landlordWins, 1, "斗地主地主胜场");
-    assertEquals(stats?.gameStats?.GOMOKU?.games, 1, "五子棋分类局数");
-    assertEquals(stats?.gameStats?.GOMOKU?.wins, 1, "五子棋分类胜场");
-    assertEquals(stats?.gameStats?.GOMOKU?.landlordGames, 0, "五子棋不记录地主局数");
-    assertEquals(stats?.gameStats?.GOMOKU?.farmerGames, 0, "五子棋不记录农民局数");
-  } finally {
-    await cleanupPlayers(playerId, farmerId);
-  }
-});
+}
 
 function context(
   matchId: string,
   gameNumber: number,
   finishedAt: number,
 ): MatchContext {
+  const match = createMatch(
+    [human("player-a", "玩家A", 2), human("player-b", "玩家B", -2)],
+    "player-a",
+  );
   return {
+    ...match,
     matchId,
-    roomCode: "123456",
-    startedAt: 1,
-    round: {
-      gameNumber,
-      finishedAt,
-      winnerPlayerId: "player-a",
-      landlordPlayerId: "player-a",
-      multiplier: 2,
-      players: [
-        { playerId: "player-a", name: "玩家A", delta: 2, isAi: false },
-        { playerId: "ai-1", name: "小智", delta: -1, isAi: true },
-        { playerId: "ai-2", name: "阿强", delta: -1, isAi: true },
-      ],
-    },
+    round: { ...match.round, gameNumber, finishedAt },
   };
 }
 
-function factionContext(
-  landlordPlayerId: string,
-  farmerPlayerId: string,
-  winnerPlayerId: string,
-  landlordIsAi = false,
-): MatchContext {
+function toRecentMatch(context: MatchContext): RecentMatch {
   return {
-    matchId: crypto.randomUUID(),
-    roomCode: "123456",
-    startedAt: 1,
-    round: {
-      gameNumber: 1,
-      finishedAt: 2,
-      winnerPlayerId,
-      landlordPlayerId,
-      multiplier: 2,
-      players: [
-        {
-          playerId: landlordPlayerId,
-          name: landlordIsAi ? "地主AI" : "地主玩家",
-          delta: 2,
-          isAi: landlordIsAi,
-        },
-        {
-          playerId: farmerPlayerId,
-          name: "农民玩家",
-          delta: -1,
-          isAi: false,
-        },
-      ],
-    },
+    matchId: context.matchId,
+    roomCode: context.roomCode,
+    startedAt: context.startedAt,
+    updatedAt: context.round.finishedAt,
+    gameType: context.gameType,
+    rounds: [context.round],
+  };
+}
+
+function human(playerId: string, name: string, delta: number): PlayerScoreDelta {
+  return { playerId, name, delta, isAi: false };
+}
+
+function ai(playerId: string, name: string, delta: number): PlayerScoreDelta {
+  return { playerId, name, delta, isAi: true };
+}
+
+function stats(
+  totalScore: number,
+  games: number,
+  wins: number,
+  landlordGames = 0,
+  landlordWins = 0,
+  farmerGames = 0,
+  farmerWins = 0,
+) {
+  return {
+    totalScore,
+    games,
+    wins,
+    landlordGames,
+    landlordWins,
+    farmerGames,
+    farmerWins,
   };
 }
 
@@ -296,38 +292,17 @@ function testPlayerId(label: string): string {
   return `store-test-${label}-${crypto.randomUUID()}`;
 }
 
-async function cleanupPlayers(...playerIds: string[]) {
+async function cleanup(...playerIds: string[]) {
   for (const playerId of playerIds) {
     await kv.delete(["players", playerId]);
     await kv.delete(["recentMatches", playerId]);
   }
 }
 
-function assertStats(
-  actual: PlayerStats | null,
-  expected: Pick<
-    PlayerStats,
-    "landlordGames" | "landlordWins" | "farmerGames" | "farmerWins"
-  >,
-  label: string,
-) {
-  if (!actual) {
-    throw new Error(`${label}不存在`);
-  }
-  assertEquals(
-    actual.landlordGames,
-    expected.landlordGames,
-    `${label}地主局数`,
-  );
-  assertEquals(actual.landlordWins, expected.landlordWins, `${label}地主胜场`);
-  assertEquals(actual.farmerGames, expected.farmerGames, `${label}农民局数`);
-  assertEquals(actual.farmerWins, expected.farmerWins, `${label}农民胜场`);
-}
-
 function assertEquals(actual: unknown, expected: unknown, label: string) {
   if (!Object.is(actual, expected)) {
     throw new Error(
-      `${label}不符合预期：期望 ${JSON.stringify(expected)}，实际 ${
+      `${label}: expected ${JSON.stringify(expected)}, received ${
         JSON.stringify(actual)
       }`,
     );

@@ -203,6 +203,13 @@ function chooseResponse(
       danger,
     );
     if (blocker) return { type: "play", cards: blocker };
+    const handoff = chooseTeammateEndgameHandoff(
+      state,
+      hand,
+      normal,
+      lastPattern,
+    );
+    if (handoff) return { type: "play", cards: handoff };
     if (bombs.length > 0 && danger === 1 && lastPattern.type === "SINGLE") {
       const landlord = state.landlordIndex;
       const lastRank = lastPattern.primary;
@@ -565,6 +572,41 @@ function chooseTeammateCover(
     return isControlPair(state, highest[0].r) ? highest : null;
   }
   return null;
+}
+
+function chooseTeammateEndgameHandoff(
+  state: EngineState,
+  hand: Card[],
+  normal: Card[][],
+  lastPattern: Pattern,
+): Card[] | null {
+  const teammate = teammateIndex(state);
+  if (teammate === null) return null;
+
+  const teammateCount = state.seats[teammate].hand.length;
+  // 两张牌不一定是一对。队友报单时，手里剩两张散牌也应优先接住，
+  // 让队友继续获得出牌权。
+  const requiredType = teammateCount <= 2 &&
+      (lastPattern.type === "SINGLE" || lastPattern.type === "PAIR")
+    ? lastPattern.type
+    : null;
+  if (
+    requiredType === null ||
+    lastPattern.type !== requiredType ||
+    lastPattern.primary > 10
+  ) {
+    return null;
+  }
+
+  return normal
+    .filter((play) => classify(play)?.type === requiredType)
+    .filter((play) => breakPenalty(hand, play) <= 1)
+    .sort(
+      (a, b) =>
+        breakPenalty(hand, a) - breakPenalty(hand, b) ||
+        primaryOf(a) - primaryOf(b) ||
+        playCost(state, hand, a) - playCost(state, hand, b),
+    )[0] ?? null;
 }
 
 function isControlPair(state: EngineState, rank: number): boolean {

@@ -39,6 +39,11 @@ export type ClientMessage =
   | { type: "READY"; ready: boolean }
   | { type: "DISBAND" }
   | { type: "QUICK_MESSAGE"; messageId: string }
+  | {
+    type: "THROW_ITEM";
+    targetSeat: number;
+    item: "TOMATO" | "EGG" | "ROSE";
+  }
   | { type: "LEAVE" }
   | { type: "ACTION"; seat: number; action: RemoteAction }
   | { type: "GOMOKU_MOVE"; row: number; col: number }

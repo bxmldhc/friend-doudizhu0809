@@ -2,10 +2,15 @@ package com.loves.wangyouge.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -24,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.loves.wangyouge.audio.GameVoicePlayer
+import com.loves.wangyouge.model.RemoteGameType
 import com.loves.wangyouge.update.UpdateInstaller
 import com.loves.wangyouge.ui.theme.DoudizhuTheme
 import kotlinx.coroutines.delay
@@ -39,6 +45,8 @@ fun DoudizhuApp(
     val updateState by viewModel.updateState.collectAsState()
     val playerProfile by viewModel.playerProfile.collectAsState()
     val quickMessage by viewModel.quickMessage.collectAsState()
+    val throwItem by viewModel.throwItem.collectAsState()
+    val inviteFriends by viewModel.inviteFriends.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val voicePlayer = remember { GameVoicePlayer(context) }
@@ -130,7 +138,8 @@ fun DoudizhuApp(
                     onStart = viewModel::startHostGame,
                     onRetry = viewModel::retryConnection,
                     onExit = viewModel::exitToHome,
-                    onDisband = viewModel::disbandRoom
+                    onDisband = viewModel::disbandRoom,
+                    onInvite = { viewModel.openInviteFriends(RemoteGameType.DOUDIZHU) }
                 )
                 is GameUiState.Playing -> GameScreen(
                     state = state,
@@ -147,15 +156,14 @@ fun DoudizhuApp(
                     onVoiceEnabledChange = viewModel::setVoiceEnabled,
                     onPlayerProfile = viewModel::openPlayerProfile,
                     onDismissPlayerProfile = viewModel::dismissPlayerProfile,
-                    quickMessage = quickMessage
+                    quickMessage = quickMessage,
+                    onThrowItem = viewModel::throwItem,
+                    throwItem = throwItem
                 )
                 is GameUiState.GomokuEntry -> GomokuEntryScreen(
                     state = state,
                     onBack = viewModel::backHome,
                     onCreate = viewModel::createGomokuRoom,
-                    onCreateWithAi = { serverUrl ->
-                        viewModel.createGomokuRoom(serverUrl, withAi = true)
-                    },
                     onJoin = viewModel::joinGomokuRoom
                 )
                 is GameUiState.GomokuLobby -> GomokuLobbyScreen(
@@ -163,7 +171,8 @@ fun DoudizhuApp(
                     onStart = viewModel::startHostGame,
                     onRetry = viewModel::retryConnection,
                     onExit = viewModel::exitToHome,
-                    onDisband = viewModel::disbandRoom
+                    onDisband = viewModel::disbandRoom,
+                    onInvite = { viewModel.openInviteFriends(RemoteGameType.GOMOKU) }
                 )
                 is GameUiState.GomokuPlaying -> GomokuGameScreen(
                     state = state,
@@ -194,7 +203,9 @@ fun DoudizhuApp(
                     onSendRequest = viewModel::sendFriendRequest,
                     onAccept = viewModel::acceptFriendRequest,
                     onReject = viewModel::rejectFriendRequest,
-                    onRemove = viewModel::removeFriend
+                    onRemove = viewModel::removeFriend,
+                    onAcceptRoomInvitation = viewModel::acceptRoomInvitation,
+                    onDismissRoomInvitation = viewModel::dismissRoomInvitation
                 )
                 is GameUiState.Account -> AccountScreen(
                     state = state,
@@ -216,6 +227,13 @@ fun DoudizhuApp(
                 )
             }
             SnackbarHost(hostState = snackbarHostState)
+            inviteFriends?.let { invite ->
+                InviteFriendsDialog(
+                    state = invite,
+                    onDismiss = viewModel::dismissInviteFriends,
+                    onInvite = viewModel::inviteFriend
+                )
+            }
             inviteConfirmation?.let { room ->
                 AlertDialog(
                     onDismissRequest = viewModel::dismissInvite,
@@ -253,6 +271,78 @@ fun DoudizhuApp(
             }
         }
     }
+}
+
+@Composable
+private fun InviteFriendsDialog(
+    state: InviteFriendsUiState,
+    onDismiss: () -> Unit,
+    onInvite: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("邀请好友") },
+        text = {
+            Column {
+                Text(
+                    "房间号：${state.roomCode}",
+                    color = androidx.compose.ui.graphics.Color(0xFF6B7D80)
+                )
+                if (!state.error.isNullOrBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        state.error,
+                        color = androidx.compose.ui.graphics.Color(0xFFB94A48)
+                    )
+                }
+                when {
+                    state.loading -> {
+                        Spacer(Modifier.height(14.dp))
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    state.friends.isEmpty() -> {
+                        Spacer(Modifier.height(14.dp))
+                        Text("暂无在线好友")
+                    }
+                    else -> {
+                        Spacer(Modifier.height(10.dp))
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 240.dp)
+                        ) {
+                            items(
+                                items = state.friends,
+                                key = { it.accountId }
+                            ) { friend ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                            ) {
+                                Text(friend.nickname, modifier = Modifier.weight(1f))
+                                Button(
+                                    onClick = { onInvite(friend.accountId) },
+                                    enabled = state.sendingAccountId == null
+                                ) {
+                                    Text(
+                                        if (state.sendingAccountId == friend.accountId) {
+                                            "发送中"
+                                        } else {
+                                            "邀请"
+                                        }
+                                    )
+                                }
+                            }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
 }
 
 @Composable

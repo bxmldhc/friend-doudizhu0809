@@ -197,20 +197,7 @@ private fun StatsPanel(
 }
 
 private fun selectedStats(stats: AccountStats, game: HistoryGame): GameStats {
-    stats.gameStats[game.wire]?.let { return it }
-    return if (game == HistoryGame.DOUDIZHU) {
-        GameStats(
-            totalScore = stats.totalScore,
-            games = stats.games,
-            wins = stats.wins,
-            landlordGames = stats.landlordGames,
-            landlordWins = stats.landlordWins,
-            farmerGames = stats.farmerGames,
-            farmerWins = stats.farmerWins
-        )
-    } else {
-        GameStats()
-    }
+    return stats.gameStats[game.wire] ?: GameStats()
 }
 
 @Composable

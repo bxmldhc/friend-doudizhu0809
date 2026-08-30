@@ -36,7 +36,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
@@ -88,12 +87,10 @@ fun GomokuEntryScreen(
     state: GameUiState.GomokuEntry,
     onBack: () -> Unit,
     onCreate: (String) -> Unit,
-    onCreateWithAi: (String) -> Unit,
     onJoin: (String, String) -> Unit
 ) {
     var serverUrl by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
     var roomCode by remember(state.initialRoom) { mutableStateOf(state.initialRoom) }
-    var withAi by remember { mutableStateOf(false) }
     Box(
         Modifier.fillMaxSize().background(GomokuPage).padding(20.dp),
         contentAlignment = Alignment.Center
@@ -123,31 +120,8 @@ fun GomokuEntryScreen(
                     label = { Text("服务器地址") },
                     singleLine = true
                 )
-                Surface(
-                    color = Color(0xFF102E36),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("加入 AI 对手", color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                if (withAi) "创建后由 AI 自动占用白方" else "创建后等待朋友加入",
-                                color = GomokuMuted,
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(checked = withAi, onCheckedChange = { withAi = it })
-                    }
-                }
                 Button(
-                    onClick = {
-                        if (withAi) onCreateWithAi(serverUrl) else onCreate(serverUrl)
-                    },
+                    onClick = { onCreate(serverUrl) },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
                 ) {
@@ -182,14 +156,14 @@ fun GomokuLobbyScreen(
     onStart: () -> Unit,
     onRetry: () -> Unit,
     onExit: () -> Unit,
-    onDisband: () -> Unit
+    onDisband: () -> Unit,
+    onInvite: () -> Unit
 ) {
     var showExitConfirm by remember { mutableStateOf(false) }
     var showDisbandConfirm by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val online = state.connection == AppConnectionState.ONLINE
     val players = List(2) { state.players.getOrElse(it) { "等待加入" } }
-    val hasAiOpponent = players.getOrNull(1) == "棋灵"
 
     BoxWithConstraints(Modifier.fillMaxSize().background(GomokuPage).padding(18.dp)) {
         val compact = maxHeight < 440.dp
@@ -209,17 +183,13 @@ fun GomokuLobbyScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        if (hasAiOpponent) "AI 练习" else "等待对手",
+                        "等待对手",
                         color = Color.White,
                         fontSize = 25.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        if (hasAiOpponent) {
-                            "黑方先行。AI 已准备，房主可直接开始对局。"
-                        } else {
-                            "黑方先行。两位玩家进入后，房主即可开始对局。"
-                        },
+                        "黑方先行。房主可以直接开始，空位会自动补入 AI。",
                         color = GomokuMuted,
                         fontSize = 13.sp
                     )
@@ -249,10 +219,16 @@ fun GomokuLobbyScreen(
                             Text("分享")
                         }
                     }
+                    OutlinedButton(
+                        onClick = onInvite,
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("邀请好友")
+                    }
                     if (state.isHost) {
                         Button(
                             onClick = onStart,
-                            enabled = online && (hasAiOpponent || players.all { it != "等待加入" }),
+                            enabled = online && players.any { it != "等待加入" },
                             modifier = Modifier.fillMaxWidth().height(52.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = GomokuCoral)
                         ) {

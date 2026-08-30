@@ -71,23 +71,30 @@ export interface AdminAuditRecord {
   targetNickname?: string;
 }
 
+const EMPTY_GAME_STATS: GameStats = {
+  totalScore: 0,
+  games: 0,
+  wins: 0,
+  landlordGames: 0,
+  landlordWins: 0,
+  farmerGames: 0,
+  farmerWins: 0,
+};
+
 export async function recordGame(
   players: PlayerScoreDelta[],
   match?: MatchContext,
 ) {
-  // 真实对局只有至少两名真人参与时才进入个人战绩，纯 AI 陪练不污染统计。
-  // 不带 match 的调用保留为底层统计兼容入口，不代表一场完整对局。
-  if (match) {
-    const humanPlayers = players.filter(
-      (player) => Boolean(player.playerId?.trim()) && !player.isAi,
-    );
-    if (humanPlayers.length < 2) return;
-  }
+  // 至少两名不同的非 AI 玩家才可能形成可见真人战绩。
+  // 生产房间结算会携带完整 match；保留旧的无场次统计入口，
+  // 但它不写入最近战绩，避免把不完整对局伪装成一场可回看的比赛。
+  if (!hasEnoughHumanPlayers(players)) return;
 
-  const factionResult = getFactionResult(match);
-  const gameType = match?.gameType ?? "DOUDIZHU";
+  const verifiedMatch = match ? normalizeMatchContext(match, players) : undefined;
+  const factionResult = getFactionResult(verifiedMatch);
+  const gameType = verifiedMatch?.gameType ?? "DOUDIZHU";
   for (const player of players) {
-    if (!player.playerId || player.isAi) continue;
+    if (!isAuthenticatedHuman(player)) continue;
     const key = ["players", player.playerId];
     const historyKey = ["recentMatches", player.playerId];
 
@@ -96,45 +103,40 @@ export async function recordGame(
         [PlayerStats, RecentMatch[]]
       >([key, historyKey]);
       const current = normalizePlayerStats(entry.value, player);
-      const isLandlord = factionResult?.landlordPlayerId === player.playerId;
-      const isFactionWinner = factionResult
-        ? (isLandlord
-          ? factionResult.winnerFaction === "LANDLORD"
-          : factionResult.winnerFaction === "FARMER")
-        : false;
+      const nextGameStats = {
+        ...current.gameStats,
+        [gameType]: mergeGameStats(
+          current.gameStats?.[gameType],
+          player,
+          factionResult,
+        ),
+      };
       const next: PlayerStats = {
         playerId: player.playerId,
         name: player.name,
-        totalScore: current.totalScore + player.delta,
-        games: current.games + 1,
-        wins: current.wins + (player.delta > 0 ? 1 : 0),
-        landlordGames: current.landlordGames +
-          (factionResult && isLandlord ? 1 : 0),
-        landlordWins: current.landlordWins +
-          (factionResult && isLandlord && isFactionWinner ? 1 : 0),
-        farmerGames: current.farmerGames +
-          (factionResult && !isLandlord ? 1 : 0),
-        farmerWins: current.farmerWins +
-          (factionResult && !isLandlord && isFactionWinner ? 1 : 0),
-        gameStats: {
-          ...current.gameStats,
-          [gameType]: mergeGameStats(
-            current.gameStats?.[gameType],
-            player,
-            factionResult,
-          ),
-        },
+        totalScore: 0,
+        games: 0,
+        wins: 0,
+        landlordGames: 0,
+        landlordWins: 0,
+        farmerGames: 0,
+        farmerWins: 0,
+        gameStats: nextGameStats,
       };
-      let operation = kv.atomic()
+      applyAggregateStats(next);
+      const operation = kv.atomic()
         .check(entry)
         .set(key, next);
-      if (match) {
-        operation = operation
+      if (verifiedMatch) {
+        operation
           .check(historyEntry)
-          .set(historyKey, mergeRecentMatch(historyEntry.value ?? [], match));
+          .set(
+            historyKey,
+            mergeRecentMatch(historyEntry.value ?? [], verifiedMatch),
+          );
       }
-      const result = await operation.commit();
-      if (result.ok) break;
+      const committed = await operation.commit();
+      if (committed.ok) break;
     }
   }
 }
@@ -142,10 +144,12 @@ export async function recordGame(
 export async function getStats(playerId: string): Promise<PlayerStats | null> {
   const result = await kv.get<PlayerStats>(["players", playerId]);
   if (!result.value) return null;
-  return normalizePlayerStats(result.value, {
+  const normalized = normalizePlayerStats(result.value, {
     playerId: result.value.playerId,
     name: result.value.name,
   });
+  applyAggregateStats(normalized);
+  return normalized;
 }
 
 function normalizePlayerStats(
@@ -155,14 +159,15 @@ function normalizePlayerStats(
   return {
     playerId: stats?.playerId ?? player.playerId,
     name: stats?.name ?? player.name,
-    totalScore: stats?.totalScore ?? 0,
-    games: stats?.games ?? 0,
-    wins: stats?.wins ?? 0,
-    landlordGames: stats?.landlordGames ?? 0,
-    landlordWins: stats?.landlordWins ?? 0,
-    farmerGames: stats?.farmerGames ?? 0,
-    farmerWins: stats?.farmerWins ?? 0,
-    gameStats: stats?.gameStats ?? {},
+    // 新的可见累计值只从分类统计推导，不混入旧顶层字段。
+    totalScore: 0,
+    games: 0,
+    wins: 0,
+    landlordGames: 0,
+    landlordWins: 0,
+    farmerGames: 0,
+    farmerWins: 0,
+    gameStats: normalizeGameStatsMap(stats?.gameStats),
   };
 }
 
@@ -171,15 +176,7 @@ function mergeGameStats(
   player: PlayerScoreDelta,
   factionResult: ReturnType<typeof getFactionResult>,
 ): GameStats {
-  const value = current ?? {
-    totalScore: 0,
-    games: 0,
-    wins: 0,
-    landlordGames: 0,
-    landlordWins: 0,
-    farmerGames: 0,
-    farmerWins: 0,
-  };
+  const value = normalizeGameStats(current);
   const isLandlord = factionResult?.landlordPlayerId === player.playerId;
   const isFactionWinner = factionResult
     ? (isLandlord
@@ -227,7 +224,10 @@ export async function getRecentMatches(
   playerId: string,
 ): Promise<RecentMatch[]> {
   const result = await kv.get<RecentMatch[]>(["recentMatches", playerId]);
-  return result.value ?? [];
+  return (result.value ?? [])
+    .filter(isVisibleRecentMatch)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, 10);
 }
 
 export async function recordAdminAudit(
@@ -290,4 +290,108 @@ export function mergeRecentMatch(
     updated,
     ...current.filter((match) => match.matchId !== context.matchId),
   ].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 10);
+}
+
+function isAuthenticatedHuman(player: PlayerScoreDelta): boolean {
+  return player.isAi === false && Boolean(player.playerId?.trim());
+}
+
+function hasEnoughHumanPlayers(players: PlayerScoreDelta[]): boolean {
+  return new Set(
+    players
+      .filter(isAuthenticatedHuman)
+      .map((player) => player.playerId.trim()),
+  ).size >= 2;
+}
+
+function normalizeMatchContext(
+  match: MatchContext,
+  players: PlayerScoreDelta[],
+): MatchContext {
+  const playersById = new Map(
+    players
+      .filter((player) => Boolean(player.playerId?.trim()))
+      .map((player) => [player.playerId, player]),
+  );
+  return {
+    ...match,
+    round: {
+      ...match.round,
+      players: match.round.players.map((roundPlayer) => {
+        const verified = playersById.get(roundPlayer.playerId);
+        return verified
+          ? {
+            ...roundPlayer,
+            playerId: verified.playerId,
+            name: verified.name,
+            delta: verified.delta,
+            isAi: verified.isAi,
+          }
+          : roundPlayer;
+      }),
+    },
+  };
+}
+
+function isVisibleRecentMatch(match: RecentMatch): boolean {
+  if (!match?.matchId || !Array.isArray(match.rounds) || !match.rounds.length) {
+    return false;
+  }
+  return match.rounds.every((round) =>
+    hasEnoughHumanPlayers(round.players ?? [])
+  );
+}
+
+function normalizeGameStatsMap(
+  gameStats: Record<string, GameStats> | undefined,
+): Record<string, GameStats> {
+  if (!gameStats) return {};
+  return Object.fromEntries(
+    Object.entries(gameStats)
+      .filter(([gameType]) => Boolean(gameType.trim()))
+      .map(([gameType, stats]) => [gameType, normalizeGameStats(stats)]),
+  );
+}
+
+function normalizeGameStats(stats: GameStats | undefined): GameStats {
+  return {
+    totalScore: validNumber(stats?.totalScore),
+    games: validCount(stats?.games),
+    wins: validCount(stats?.wins),
+    landlordGames: validCount(stats?.landlordGames),
+    landlordWins: validCount(stats?.landlordWins),
+    farmerGames: validCount(stats?.farmerGames),
+    farmerWins: validCount(stats?.farmerWins),
+  };
+}
+
+function applyAggregateStats(stats: PlayerStats): void {
+  const aggregate = Object.values(stats.gameStats ?? {}).reduce<GameStats>(
+    (total, current) => ({
+      totalScore: total.totalScore + current.totalScore,
+      games: total.games + current.games,
+      wins: total.wins + current.wins,
+      landlordGames: total.landlordGames + current.landlordGames,
+      landlordWins: total.landlordWins + current.landlordWins,
+      farmerGames: total.farmerGames + current.farmerGames,
+      farmerWins: total.farmerWins + current.farmerWins,
+    }),
+    { ...EMPTY_GAME_STATS },
+  );
+  stats.totalScore = aggregate.totalScore;
+  stats.games = aggregate.games;
+  stats.wins = aggregate.wins;
+  stats.landlordGames = aggregate.landlordGames;
+  stats.landlordWins = aggregate.landlordWins;
+  stats.farmerGames = aggregate.farmerGames;
+  stats.farmerWins = aggregate.farmerWins;
+}
+
+function validNumber(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function validCount(value: unknown): number {
+  return Math.max(0, Math.floor(validNumber(value)));
 }

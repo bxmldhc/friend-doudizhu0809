@@ -41,6 +41,7 @@ class OnlineClient(
     private val onGomokuState: (GomokuState) -> Unit,
     private val onRoomDisbanded: (String) -> Unit,
     private val onQuickMessage: (seat: Int, messageId: String, at: Long) -> Unit,
+    private val onItemThrown: (fromSeat: Int, targetSeat: Int, item: String, at: Long) -> Unit,
     private val onConnection: (ConnectionState) -> Unit,
     private val onServerError: (ServerError) -> Unit
 ) {
@@ -93,6 +94,12 @@ class OnlineClient(
                             is NetMessage.QuickMessage -> onQuickMessage(
                                 msg.seat,
                                 msg.messageId,
+                                msg.at
+                            )
+                            is NetMessage.ItemThrown -> onItemThrown(
+                                msg.fromSeat,
+                                msg.targetSeat,
+                                msg.item,
                                 msg.at
                             )
                             is NetMessage.Error -> onServerError(msg.error)
@@ -195,6 +202,10 @@ class OnlineClient(
 
     fun sendQuickMessage(messageId: String) {
         webSocket?.send(GameProtocol.encodeQuickMessage(messageId))
+    }
+
+    fun sendThrowItem(targetSeat: Int, item: String) {
+        webSocket?.send(GameProtocol.encodeThrowItem(targetSeat, item))
     }
 
     fun sendAction(seat: Int, action: RemoteAction) {

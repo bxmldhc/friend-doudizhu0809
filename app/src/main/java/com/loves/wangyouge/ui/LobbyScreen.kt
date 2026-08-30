@@ -64,18 +64,18 @@ fun LobbyScreen(
     onStart: () -> Unit,
     onRetry: () -> Unit,
     onExit: () -> Unit,
-    onDisband: () -> Unit
+    onDisband: () -> Unit,
+    onInvite: () -> Unit
 ) {
     val context = LocalContext.current
     var showDisbandConfirm by remember { mutableStateOf(false) }
     val humanPlayers = state.players
         .take(3)
-        .filter { it.isNotBlank() && it != "等待加入" }
+        .filter { it.isNotBlank() && it != "等待加入" && it != "服务器 AI" }
     val lobbySeats = buildList {
         state.players.take(3).forEach { name ->
             if (name.isNotBlank() && name != "等待加入") add(LobbySeatData(name, true))
         }
-        repeat(state.aiCount) { add(LobbySeatData("服务器 AI", false)) }
         while (size < 3) add(LobbySeatData("等待真人", null))
     }.take(3)
     Column(
@@ -182,19 +182,18 @@ fun LobbyScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "本局配置：${state.aiCount} 个 AI · ${difficultyLabel(state.config.difficulty)}" +
-                            " · ${state.config.actionTimeoutSeconds} 秒 · 真人 " +
-                            "${humanPlayers.size}/${state.requiredHumans}",
+                        "三人局 · 空位自动补 AI · ${state.config.actionTimeoutSeconds} 秒 · 真人 " +
+                            "${humanPlayers.size}/3",
                         color = Muted,
                         fontSize = 12.sp
                     )
                     Text(
-                        text = if (humanPlayers.size == state.requiredHumans) {
-                            "人数已满足，可以请求开始"
+                        text = if (humanPlayers.isNotEmpty()) {
+                            "房主可以开始，未加入的座位将由 AI 自动补齐"
                         } else {
-                            "还需要 ${state.requiredHumans - humanPlayers.size} 名真人玩家"
+                            "至少需要一名真人玩家才能开始"
                         },
-                        color = if (humanPlayers.size == state.requiredHumans) Wax else Muted,
+                        color = if (humanPlayers.isNotEmpty()) Wax else Muted,
                         fontSize = 11.sp
                     )
                 }
@@ -231,6 +230,12 @@ fun LobbyScreen(
                 Text("等待房主开始")
             }
         }
+        OutlinedButton(
+            onClick = onInvite,
+            modifier = Modifier.fillMaxWidth().height(46.dp)
+        ) {
+            Text("邀请好友")
+        }
         Spacer(Modifier.height(12.dp))
     }
     if (showDisbandConfirm) {
@@ -258,12 +263,6 @@ fun LobbyScreen(
             }
         )
     }
-}
-
-private fun difficultyLabel(difficulty: com.loves.wangyouge.model.AiDifficulty): String = when (difficulty) {
-    com.loves.wangyouge.model.AiDifficulty.EASY -> "简单 AI"
-    com.loves.wangyouge.model.AiDifficulty.MEDIUM -> "普通 AI"
-    com.loves.wangyouge.model.AiDifficulty.HARD -> "困难 AI"
 }
 
 private data class LobbySeatData(val name: String, val isHuman: Boolean?)

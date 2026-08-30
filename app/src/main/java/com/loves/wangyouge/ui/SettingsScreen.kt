@@ -863,73 +863,10 @@ private fun RoomForm(
                         Text("服务器生成六位房号", color = Muted, fontSize = 15.sp)
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "AI 数量",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(0, 1, 2).forEach { option ->
-                                val selected = aiCount == option
-                                OutlinedButton(
-                                    onClick = {
-                                        aiCount = option
-                                        error = null
-                                    },
-                                    modifier = Modifier.weight(1f).height(48.dp),
-                                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                                        containerColor = if (selected) Coral else Color.Transparent,
-                                        contentColor = if (selected) Color.White else Muted
-                                    ),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("$option 个", fontSize = 13.sp)
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(5.dp))
-                        Text(
-                            text = "需要 ${3 - aiCount} 名真人玩家才能开始",
+                            text = "等待区最多可加入 3 名真人，开局时空位自动补入 AI",
                             color = Muted,
                             fontSize = 12.sp
                         )
-                        if (aiCount > 0) {
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                "AI 难度",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf(
-                                    AiDifficulty.EASY to "简单",
-                                    AiDifficulty.MEDIUM to "普通",
-                                    AiDifficulty.HARD to "困难"
-                                ).forEach { (option, label) ->
-                                    val selected = difficulty == option
-                                    OutlinedButton(
-                                        onClick = { difficulty = option },
-                                        modifier = Modifier.weight(1f).height(44.dp),
-                                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                                            containerColor = if (selected) Wax else Color.Transparent,
-                                            contentColor = if (selected) PageBg else Muted
-                                        ),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Text(label, fontSize = 12.sp)
-                                    }
-                                }
-                            }
-                        }
                         Spacer(Modifier.height(10.dp))
                         Text(
                             "操作限时",

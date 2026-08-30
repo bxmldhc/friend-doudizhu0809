@@ -4,6 +4,7 @@ import { kv } from "./db.ts";
 // 客户端每 10 秒发送一次心跳；保留约 3 次心跳的容错窗口。
 export const APP_HEARTBEAT_INTERVAL_MS = 10_000;
 export const APP_ONLINE_WINDOW_MS = 35_000;
+export const ROOM_INVITATION_TTL_MS = 5 * 60_000;
 const MAX_FRIENDS = 200;
 
 export interface AppPresence {
@@ -26,6 +27,19 @@ interface StoredFriend {
   createdAt: number;
 }
 
+interface StoredRoomInvitation {
+  invitationId: string;
+  fromAccountId: string;
+  toAccountId: string;
+  roomCode: string;
+  gameType: RoomInvitationGameType;
+  createdAt: number;
+  expiresAt: number;
+  status: "PENDING" | "ACCEPTED" | "DISMISSED";
+}
+
+export type RoomInvitationGameType = "DOUDIZHU" | "GOMOKU";
+
 export interface OnlineAccountSnapshot {
   accountId: string;
   nickname: string;
@@ -45,6 +59,15 @@ export interface FriendRequestProfile {
   account: FriendProfile;
   direction: "INCOMING" | "OUTGOING";
   createdAt: number;
+}
+
+export interface RoomInvitationProfile {
+  invitationId: string;
+  roomCode: string;
+  gameType: RoomInvitationGameType;
+  inviter: FriendProfile;
+  createdAt: number;
+  expiresAt: number;
 }
 
 export async function touchPresence(
@@ -359,6 +382,260 @@ export async function removeFriend(
     .commit();
 }
 
+export async function createRoomInvitation(
+  fromAccountId: string,
+  targetAccountId: string,
+  roomCode: string,
+  gameType: RoomInvitationGameType,
+): Promise<RoomInvitationProfile> {
+  const targetId = targetAccountId.trim();
+  const normalizedRoomCode = roomCode.trim();
+  if (!targetId || targetId === fromAccountId) {
+    throw new AuthError("不能邀请自己", "INVALID_INVITATION_TARGET");
+  }
+  if (!/^\d{6}$/.test(normalizedRoomCode)) {
+    throw new AuthError("房间号格式不正确", "INVALID_ROOM_CODE");
+  }
+  if (gameType !== "DOUDIZHU" && gameType !== "GOMOKU") {
+    throw new AuthError("不支持的游戏类型", "INVALID_GAME_TYPE");
+  }
+
+  const [friendEntry, target, presence] = await Promise.all([
+    kv.get<StoredFriend>(["friendsByAccount", fromAccountId, targetId]),
+    getPublicAccount(targetId),
+    getPresence(targetId),
+  ]);
+  if (!friendEntry.value || !target || target.disabled) {
+    throw new AuthError(
+      "只能邀请已添加的好友",
+      "INVITATION_FRIEND_REQUIRED",
+      403,
+    );
+  }
+  if (!presence) {
+    throw new AuthError(
+      "好友当前不在线，暂时不能邀请",
+      "INVITATION_TARGET_OFFLINE",
+      409,
+    );
+  }
+
+  const pairKey = roomInvitationPairKey(normalizedRoomCode, targetId);
+  const pairEntry = await kv.get<string>(pairKey);
+  if (pairEntry.value) {
+    const existing = await kv.get<StoredRoomInvitation>([
+      "roomInvitations",
+      pairEntry.value,
+    ]);
+    if (
+      existing.value?.status === "PENDING" &&
+      existing.value.expiresAt > Date.now()
+    ) {
+      throw new AuthError(
+        "已经向该好友发送过这个房间的邀请",
+        "ROOM_INVITATION_EXISTS",
+        409,
+      );
+    }
+  }
+
+  const now = Date.now();
+  const invitation: StoredRoomInvitation = {
+    invitationId: crypto.randomUUID(),
+    fromAccountId,
+    toAccountId: targetId,
+    roomCode: normalizedRoomCode,
+    gameType,
+    createdAt: now,
+    expiresAt: now + ROOM_INVITATION_TTL_MS,
+    status: "PENDING",
+  };
+  const result = await kv.atomic()
+    .check(pairEntry)
+    .set(
+      ["roomInvitations", invitation.invitationId],
+      invitation,
+      { expireIn: ROOM_INVITATION_TTL_MS },
+    )
+    .set(
+      roomInvitationTargetKey(targetId, invitation.invitationId),
+      invitation.invitationId,
+      { expireIn: ROOM_INVITATION_TTL_MS },
+    )
+    .set(pairKey, invitation.invitationId, { expireIn: ROOM_INVITATION_TTL_MS })
+    .commit();
+  if (!result.ok) {
+    throw new AuthError(
+      "邀请状态刚刚变化，请重试",
+      "ROOM_INVITATION_CHANGED",
+      409,
+    );
+  }
+  return toRoomInvitationProfile(invitation, await toFriendProfile(
+    await requirePublicAccount(fromAccountId),
+    now,
+  ));
+}
+
+export async function listRoomInvitations(
+  accountId: string,
+): Promise<RoomInvitationProfile[]> {
+  const invitations: RoomInvitationProfile[] = [];
+  const staleKeys: Deno.KvKey[] = [];
+  for await (
+    const entry of kv.list<string>({
+      prefix: ["roomInvitationByTarget", accountId],
+    })
+  ) {
+    const invitationEntry = await kv.get<StoredRoomInvitation>([
+      "roomInvitations",
+      entry.value,
+    ]);
+    const invitation = invitationEntry.value;
+    if (
+      !invitation ||
+      invitation.toAccountId !== accountId ||
+      invitation.status !== "PENDING" ||
+      invitation.expiresAt <= Date.now()
+    ) {
+      staleKeys.push(entry.key);
+      if (invitation) {
+        staleKeys.push(roomInvitationPairKey(
+          invitation.roomCode,
+          invitation.toAccountId,
+        ));
+      }
+      continue;
+    }
+    const inviter = await getPublicAccount(invitation.fromAccountId);
+    if (!inviter || inviter.disabled) {
+      staleKeys.push(entry.key);
+      staleKeys.push(roomInvitationPairKey(
+        invitation.roomCode,
+        invitation.toAccountId,
+      ));
+      continue;
+    }
+    invitations.push(toRoomInvitationProfile(
+      invitation,
+      await toFriendProfile(inviter, invitation.createdAt),
+    ));
+  }
+  for (const key of staleKeys) await kv.delete(key);
+  return invitations.sort((left, right) => right.createdAt - left.createdAt);
+}
+
+export async function getRoomInvitationForTarget(
+  accountId: string,
+  invitationId: string,
+): Promise<RoomInvitationProfile> {
+  const key: Deno.KvKey = ["roomInvitations", invitationId.trim()];
+  const entry = await kv.get<StoredRoomInvitation>(key);
+  const invitation = entry.value;
+  if (
+    !invitation ||
+    invitation.toAccountId !== accountId ||
+    invitation.status !== "PENDING" ||
+    invitation.expiresAt <= Date.now()
+  ) {
+    if (invitation && invitation.expiresAt <= Date.now()) {
+      await kv.atomic()
+        .delete(roomInvitationTargetKey(accountId, invitation.invitationId))
+        .delete(roomInvitationPairKey(invitation.roomCode, accountId))
+        .commit();
+    }
+    throw new AuthError("房间邀请不存在或已过期", "ROOM_INVITATION_NOT_FOUND", 404);
+  }
+  const [inviter, friendEntry] = await Promise.all([
+    getPublicAccount(invitation.fromAccountId),
+    kv.get<StoredFriend>([
+      "friendsByAccount",
+      accountId,
+      invitation.fromAccountId,
+    ]),
+  ]);
+  if (!inviter || inviter.disabled || !friendEntry.value) {
+    throw new AuthError("该邀请已不再有效", "ROOM_INVITATION_INVALID", 409);
+  }
+  return toRoomInvitationProfile(
+    invitation,
+    await toFriendProfile(inviter, invitation.createdAt),
+  );
+}
+
+export async function acceptRoomInvitation(
+  accountId: string,
+  invitationId: string,
+): Promise<RoomInvitationProfile> {
+  const key: Deno.KvKey = ["roomInvitations", invitationId.trim()];
+  const entry = await kv.get<StoredRoomInvitation>(key);
+  const invitation = entry.value;
+  if (
+    !invitation ||
+    invitation.toAccountId !== accountId ||
+    invitation.status !== "PENDING" ||
+    invitation.expiresAt <= Date.now()
+  ) {
+    throw new AuthError("房间邀请不存在或已过期", "ROOM_INVITATION_NOT_FOUND", 404);
+  }
+  const profile = await getRoomInvitationForTarget(accountId, invitationId);
+  const updated = {
+    ...invitation,
+    status: "ACCEPTED" as const,
+  };
+  const result = await kv.atomic()
+    .check(entry)
+    .set(key, updated, {
+      expireIn: Math.max(1, invitation.expiresAt - Date.now()),
+    })
+    .delete(roomInvitationTargetKey(accountId, invitation.invitationId))
+    .delete(roomInvitationPairKey(invitation.roomCode, accountId))
+    .commit();
+  if (!result.ok) {
+    throw new AuthError(
+      "邀请状态刚刚变化，请重试",
+      "ROOM_INVITATION_CHANGED",
+      409,
+    );
+  }
+  return profile;
+}
+
+export async function dismissRoomInvitation(
+  accountId: string,
+  invitationId: string,
+): Promise<void> {
+  const key: Deno.KvKey = ["roomInvitations", invitationId.trim()];
+  const entry = await kv.get<StoredRoomInvitation>(key);
+  const invitation = entry.value;
+  if (
+    !invitation ||
+    invitation.toAccountId !== accountId ||
+    invitation.status !== "PENDING"
+  ) {
+    throw new AuthError("房间邀请不存在或已处理", "ROOM_INVITATION_NOT_FOUND", 404);
+  }
+  const updated = {
+    ...invitation,
+    status: "DISMISSED" as const,
+  };
+  const result = await kv.atomic()
+    .check(entry)
+    .set(key, updated, {
+      expireIn: Math.max(1, invitation.expiresAt - Date.now()),
+    })
+    .delete(roomInvitationTargetKey(accountId, invitation.invitationId))
+    .delete(roomInvitationPairKey(invitation.roomCode, accountId))
+    .commit();
+  if (!result.ok) {
+    throw new AuthError(
+      "邀请状态刚刚变化，请重试",
+      "ROOM_INVITATION_CHANGED",
+      409,
+    );
+  }
+}
+
 async function toFriendProfile(
   account: PublicAccount,
   createdAt: number,
@@ -373,9 +650,45 @@ async function toFriendProfile(
   };
 }
 
+function toRoomInvitationProfile(
+  invitation: StoredRoomInvitation,
+  inviter: FriendProfile,
+): RoomInvitationProfile {
+  return {
+    invitationId: invitation.invitationId,
+    roomCode: invitation.roomCode,
+    gameType: invitation.gameType,
+    inviter,
+    createdAt: invitation.createdAt,
+    expiresAt: invitation.expiresAt,
+  };
+}
+
+async function requirePublicAccount(accountId: string): Promise<PublicAccount> {
+  const account = await getPublicAccount(accountId);
+  if (!account || account.disabled) {
+    throw new AuthError("邀请者账号不可用", "ACCOUNT_NOT_FOUND", 404);
+  }
+  return account;
+}
+
 function friendPairKey(left: string, right: string): Deno.KvKey {
   const [first, second] = [left, right].sort();
   return ["friendRequestByPair", first, second];
+}
+
+function roomInvitationTargetKey(
+  accountId: string,
+  invitationId: string,
+): Deno.KvKey {
+  return ["roomInvitationByTarget", accountId, invitationId];
+}
+
+function roomInvitationPairKey(
+  roomCode: string,
+  targetAccountId: string,
+): Deno.KvKey {
+  return ["roomInvitationByRoomTarget", roomCode, targetAccountId];
 }
 
 async function countFriends(accountId: string): Promise<number> {

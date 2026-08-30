@@ -29,12 +29,18 @@ import {
 } from "./game/store.ts";
 import {
   acceptFriendRequest,
+  acceptRoomInvitation,
   clearPresence,
+  createRoomInvitation,
+  dismissRoomInvitation,
+  getRoomInvitationForTarget,
   listAppOnlineAccounts,
   listFriendRequests,
   listFriends,
+  listRoomInvitations,
   rejectFriendRequest,
   removeFriend,
+  type RoomInvitationGameType,
   sendFriendRequest,
   touchPresence,
 } from "./game/social.ts";
@@ -45,8 +51,24 @@ export interface AdminRoomReader {
   getAdminOnlineAccounts(): AdminOnlineAccountSnapshot[];
 }
 
+export interface RoomInvitationEligibility {
+  ok: boolean;
+  gameType?: RoomInvitationGameType;
+  code?: string;
+  message?: string;
+}
+
+export interface RoomInvitationReader {
+  getRoomInvitationEligibility(input: {
+    roomCode: string;
+    inviterAccountId: string;
+    targetAccountId: string;
+  }): Promise<RoomInvitationEligibility> | RoomInvitationEligibility;
+}
+
 export interface ApiDependencies {
   roomManager?: AdminRoomReader;
+  roomInvitationReader?: RoomInvitationReader;
 }
 
 export async function handleApiRequest(
@@ -159,6 +181,13 @@ export async function handleApiRequest(
         data: { friends: await listFriends(account.accountId) },
       });
     }
+    if (req.method === "GET" && url.pathname === "/api/invitations") {
+      const { account } = await requireAccount(req);
+      return json({
+        ok: true,
+        data: { invitations: await listRoomInvitations(account.accountId) },
+      });
+    }
     if (req.method === "GET" && url.pathname === "/api/friends/requests") {
       const { account } = await requireAccount(req);
       const direction = url.searchParams.get("direction")?.toUpperCase();
@@ -191,6 +220,59 @@ export async function handleApiRequest(
         String(body.targetAccountId ?? ""),
       );
       return json({ ok: true, data: { request } }, 201);
+    }
+    const roomInvitationCreateMatch = url.pathname.match(
+      /^\/api\/rooms\/([^/]+)\/invitations$/,
+    );
+    if (req.method === "POST" && roomInvitationCreateMatch) {
+      const { account } = await requireAccount(req);
+      const roomCode = decodePathSegment(roomInvitationCreateMatch[1]);
+      const body = await readJsonObject(req);
+      const targetAccountId = String(body.targetAccountId ?? "").trim();
+      const eligibility = await queryRoomInvitationEligibility(
+        dependencies,
+        roomCode,
+        account.accountId,
+        targetAccountId,
+      );
+      const invitation = await createRoomInvitation(
+        account.accountId,
+        targetAccountId,
+        roomCode,
+        eligibility.gameType!,
+      );
+      return json({ ok: true, data: { invitation } }, 201);
+    }
+    const roomInvitationAction = url.pathname.match(
+      /^\/api\/invitations\/([^/]+)\/(accept|dismiss)$/,
+    );
+    if (req.method === "POST" && roomInvitationAction) {
+      const { account } = await requireAccount(req);
+      const invitationId = decodePathSegment(roomInvitationAction[1]);
+      const action = roomInvitationAction[2];
+      if (action === "dismiss") {
+        await dismissRoomInvitation(account.accountId, invitationId);
+        return json({ ok: true, data: {} });
+      }
+      const pending = await getRoomInvitationForTarget(
+        account.accountId,
+        invitationId,
+      );
+      await queryRoomInvitationEligibility(
+        dependencies,
+        pending.roomCode,
+        pending.inviter.accountId,
+        account.accountId,
+      );
+      const invitation = await acceptRoomInvitation(account.accountId, invitationId);
+      return json({
+        ok: true,
+        data: {
+          invitation,
+          roomCode: invitation.roomCode,
+          gameType: invitation.gameType,
+        },
+      });
     }
     const friendRequestAction = url.pathname.match(
       /^\/api\/friends\/requests\/([^/]+)\/(accept|reject)$/,
@@ -524,6 +606,35 @@ function requireRoomManager(dependencies: ApiDependencies): AdminRoomReader {
     throw new Error("Room manager dependency is not configured");
   }
   return dependencies.roomManager;
+}
+
+async function queryRoomInvitationEligibility(
+  dependencies: ApiDependencies,
+  roomCode: string,
+  inviterAccountId: string,
+  targetAccountId: string,
+): Promise<RoomInvitationEligibility> {
+  if (!dependencies.roomInvitationReader) {
+    throw new AuthError(
+      "房间邀请暂时不可用",
+      "ROOM_INVITATIONS_UNAVAILABLE",
+      503,
+    );
+  }
+  const result = await dependencies.roomInvitationReader
+    .getRoomInvitationEligibility({
+      roomCode,
+      inviterAccountId,
+      targetAccountId,
+    });
+  if (!result.ok || !result.gameType) {
+    throw new AuthError(
+      result.message ?? "当前房间暂时不能邀请好友",
+      result.code ?? "ROOM_INVITATION_DENIED",
+      409,
+    );
+  }
+  return result;
 }
 
 async function readJsonObject(req: Request): Promise<Record<string, unknown>> {

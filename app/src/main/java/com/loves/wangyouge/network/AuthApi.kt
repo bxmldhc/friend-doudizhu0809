@@ -126,9 +126,19 @@ data class FriendRequest(
     val createdAt: Long
 )
 
+data class RoomInvitation(
+    val invitationId: String,
+    val roomCode: String,
+    val gameType: String,
+    val inviter: FriendProfile,
+    val createdAt: Long,
+    val expiresAt: Long
+)
+
 data class FriendsSnapshot(
     val friends: List<FriendProfile>,
-    val requests: List<FriendRequest>
+    val requests: List<FriendRequest>,
+    val roomInvitations: List<RoomInvitation> = emptyList()
 )
 
 data class AccountStats(
@@ -354,6 +364,76 @@ class AuthApi(
                 baseUrl = baseUrl,
                 path = "/api/friends/${java.net.URLEncoder.encode(accountId, Charsets.UTF_8.name())}",
                 method = "DELETE",
+                authToken = authToken
+            ),
+            parser = { Unit }
+        )
+    }
+
+    suspend fun listRoomInvitations(
+        baseUrl: String,
+        authToken: String
+    ): ApiResult<List<RoomInvitation>> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/invitations",
+                method = "GET",
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseRoomInvitations
+        )
+    }
+
+    suspend fun createRoomInvitation(
+        baseUrl: String,
+        authToken: String,
+        roomCode: String,
+        gameType: String,
+        targetAccountId: String
+    ): ApiResult<RoomInvitation> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/rooms/${java.net.URLEncoder.encode(roomCode, Charsets.UTF_8.name())}/invitations",
+                method = "POST",
+                body = JSONObject()
+                    .put("gameType", gameType)
+                    .put("targetAccountId", targetAccountId),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseRoomInvitation
+        )
+    }
+
+    suspend fun acceptRoomInvitation(
+        baseUrl: String,
+        authToken: String,
+        invitationId: String
+    ): ApiResult<RoomInvitation> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/invitations/${java.net.URLEncoder.encode(invitationId, Charsets.UTF_8.name())}/accept",
+                method = "POST",
+                body = JSONObject(),
+                authToken = authToken
+            ),
+            parser = AuthResponseParser::parseRoomInvitation
+        )
+    }
+
+    suspend fun dismissRoomInvitation(
+        baseUrl: String,
+        authToken: String,
+        invitationId: String
+    ): ApiResult<Unit> {
+        return execute(
+            request = jsonRequest(
+                baseUrl = baseUrl,
+                path = "/api/invitations/${java.net.URLEncoder.encode(invitationId, Charsets.UTF_8.name())}/dismiss",
+                method = "POST",
+                body = JSONObject(),
                 authToken = authToken
             ),
             parser = { Unit }
@@ -936,6 +1016,34 @@ internal object AuthResponseParser {
             }
         }.orEmpty()
         return FriendsSnapshot(friends, requests)
+    }
+
+    fun parseRoomInvitations(root: JSONObject): List<RoomInvitation> {
+        val data = root.optJSONObject("data") ?: root
+        val array = data.optJSONArray("invitations") ?: return emptyList()
+        return List(array.length()) { index ->
+            parseRoomInvitationObject(array.getJSONObject(index))
+        }
+    }
+
+    fun parseRoomInvitation(root: JSONObject): RoomInvitation {
+        val data = root.optJSONObject("data") ?: root
+        return parseRoomInvitationObject(data.optJSONObject("invitation") ?: data)
+    }
+
+    private fun parseRoomInvitationObject(item: JSONObject): RoomInvitation {
+        return RoomInvitation(
+            invitationId = firstString(item, "invitationId", "id"),
+            roomCode = firstString(item, "roomCode", "room"),
+            gameType = firstString(item, "gameType", "type"),
+            inviter = parseFriendProfile(
+                item.optJSONObject("inviter")
+                    ?: item.optJSONObject("from")
+                    ?: JSONObject()
+            ),
+            createdAt = firstLong(item, "createdAt"),
+            expiresAt = firstLong(item, "expiresAt")
+        )
     }
 
     fun parseFriendSearch(root: JSONObject): List<FriendProfile> {

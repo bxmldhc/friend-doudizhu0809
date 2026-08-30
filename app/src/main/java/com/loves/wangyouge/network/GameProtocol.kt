@@ -42,6 +42,12 @@ sealed interface NetMessage {
         val messageId: String,
         val at: Long
     ) : NetMessage
+    data class ItemThrown(
+        val fromSeat: Int,
+        val targetSeat: Int,
+        val item: String,
+        val at: Long
+    ) : NetMessage
     data class Error(val error: ServerError) : NetMessage {
         val code: String?
             get() = error.code
@@ -125,6 +131,14 @@ object GameProtocol {
             .toString()
     }
 
+    fun encodeThrowItem(targetSeat: Int, item: String): String {
+        return JSONObject()
+            .put("type", "THROW_ITEM")
+            .put("targetSeat", targetSeat)
+            .put("item", item)
+            .toString()
+    }
+
     fun encodeAction(seat: Int, action: RemoteAction): String {
         val actionObj = JSONObject()
         when (action) {
@@ -196,6 +210,12 @@ object GameProtocol {
             "QUICK_MESSAGE" -> NetMessage.QuickMessage(
                 seat = obj.getInt("seat"),
                 messageId = obj.getString("messageId"),
+                at = obj.optLong("at", System.currentTimeMillis())
+            )
+            "ITEM_THROWN" -> NetMessage.ItemThrown(
+                fromSeat = obj.getInt("fromSeat"),
+                targetSeat = obj.getInt("targetSeat"),
+                item = obj.getString("item"),
                 at = obj.optLong("at", System.currentTimeMillis())
             )
             "PONG" -> NetMessage.Pong

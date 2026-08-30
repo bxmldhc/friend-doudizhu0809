@@ -77,19 +77,24 @@ function finishCurrentGame(manager: RoomManager, code: string) {
   internal.afterEngineChange(room);
 }
 
-Deno.test("2 个 AI：1 名真人可以开始", () => {
+Deno.test("创建时保留真人空位，开局时自动补足 AI", () => {
   const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
   manager.create(socket(host), "房主", "MEDIUM", 2);
 
   const room = lastMessage(host);
-  if (room.aiCount !== 2 || room.requiredHumans !== 1) {
-    throw new Error("房间配置没有保存为 2 个 AI / 1 名真人");
+  if (room.aiCount !== 0 || room.requiredHumans !== 3) {
+    throw new Error("等待区没有保留全部真人座位");
   }
 
   manager.start(socket(host));
-  if (lastMessage(host).type !== "STATE") {
-    throw new Error("1 名真人配置应该允许开始");
+  const state = latestState(host).state as Record<string, unknown>;
+  const seats = state.seats as Record<string, unknown>[];
+  if (
+    lastMessage(host).type !== "STATE" ||
+    seats.filter((seat) => seat.isHuman === false).length !== 2
+  ) {
+    throw new Error("开局时没有自动补足 2 个 AI");
   }
 });
 
@@ -148,51 +153,44 @@ Deno.test("只有认证账号会写入累计战绩，旧版游客仅保留场内
   }
 });
 
-Deno.test("1 个 AI：需要 2 名真人，人数不足时拒绝开始", () => {
+Deno.test("一名真人可以开始，空位由 AI 自动补齐", () => {
   const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
-  const friend = new FakeSocket();
   manager.create(socket(host), "房主", "MEDIUM", 1);
   const code = roomCode(host);
 
   manager.start(socket(host));
-  const rejected = lastMessage(host);
+  const state = latestState(host).state as Record<string, unknown>;
+  const seats = state.seats as Record<string, unknown>[];
   if (
-    rejected.type !== "ERROR" ||
-    !String(rejected.message).includes("还需要加入 1 名真人")
+    lastMessage(host).type !== "STATE" ||
+    seats.filter((seat) => seat.isHuman === false).length !== 2
   ) {
-    throw new Error("人数不足时没有返回正确错误");
+    throw new Error("一名真人开局后没有补足两个 AI");
   }
-
-  manager.join(socket(friend), code, "朋友");
-  manager.start(socket(host));
-  if (lastMessage(host).type !== "STATE") {
-    throw new Error("2 名真人配置应该允许开始");
-  }
+  void code;
 });
 
-Deno.test("0 个 AI：需要 3 名真人，人数不足时拒绝开始", () => {
+Deno.test("两名真人开局后只补一个 AI", () => {
   const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();
   const friend = new FakeSocket();
-  const anotherFriend = new FakeSocket();
   manager.create(socket(host), "房主", "MEDIUM", 0);
   const code = roomCode(host);
 
   manager.join(socket(friend), code, "朋友1");
   manager.start(socket(host));
-  if (lastMessage(host).type !== "ERROR") {
-    throw new Error("3 名真人配置在 2 人时不应开始");
-  }
-
-  manager.join(socket(anotherFriend), code, "朋友2");
-  manager.start(socket(host));
-  if (lastMessage(host).type !== "STATE") {
-    throw new Error("3 名真人配置应该允许开始");
+  const state = latestState(host).state as Record<string, unknown>;
+  const seats = state.seats as Record<string, unknown>[];
+  if (
+    lastMessage(host).type !== "STATE" ||
+    seats.filter((seat) => seat.isHuman === false).length !== 1
+  ) {
+    throw new Error("两名真人开局后没有补一个 AI");
   }
 });
 
-Deno.test("AI 配置限制在 0 到 2，且房间不会超过所需真人数", () => {
+Deno.test("等待区最多允许三名真人", () => {
   const manager = new RoomManager();
   const host = new FakeSocket();
   const friend = new FakeSocket();
@@ -200,8 +198,14 @@ Deno.test("AI 配置限制在 0 到 2，且房间不会超过所需真人数", (
   const code = roomCode(host);
 
   const joinResult = manager.join(socket(friend), code, "朋友");
-  if (joinResult.ok) {
-    throw new Error("2 个 AI 配置不应再加入第二名真人");
+  if (!joinResult.ok) throw new Error("第二名真人无法加入等待区");
+  const third = new FakeSocket();
+  if (!manager.join(socket(third), code, "朋友2").ok) {
+    throw new Error("第三名真人无法加入等待区");
+  }
+  const overflow = new FakeSocket();
+  if (manager.join(socket(overflow), code, "朋友3").ok) {
+    throw new Error("已满等待区接受了第四名真人");
   }
 });
 
@@ -622,7 +626,7 @@ Deno.test("管理房间快照只返回脱敏统计和座位状态", () => {
   if (
     snapshot.roomCode !== code ||
     snapshot.phase !== "WAITING" ||
-    snapshot.aiCount !== 1 ||
+    snapshot.aiCount !== 0 ||
     snapshot.connectedHumanCount !== 2 ||
     snapshot.occupiedHumanCount !== 2 ||
     snapshot.hostName !== "房主"
@@ -650,7 +654,7 @@ Deno.test("管理房间快照只返回脱敏统计和座位状态", () => {
     overview.activeGameCount !== 0 ||
     overview.connectedHumanCount !== 2 ||
     overview.occupiedHumanCount !== 2 ||
-    overview.aiCount !== 1
+    overview.aiCount !== 0
   ) {
     throw new Error("管理房间汇总不正确");
   }
@@ -672,6 +676,11 @@ Deno.test("关键 WebSocket 拒绝场景返回稳定错误码并保留 message",
   assertErrorCode(missingJoin, "ROOM_NOT_FOUND");
 
   manager.join(socket(friend), code, "朋友");
+  const third = new FakeSocket();
+  await manager.handleMessage(
+    socket(third),
+    JSON.stringify({ type: "JOIN", room: code, name: "朋友2" }),
+  );
   await manager.handleMessage(
     socket(overflow),
     JSON.stringify({ type: "JOIN", room: code, name: "多余玩家" }),
@@ -685,7 +694,9 @@ Deno.test("关键 WebSocket 拒绝场景返回稳定错误码并保留 message",
   const waitingHost = new FakeSocket();
   secondManager.create(socket(waitingHost), "房主", "MEDIUM", 0);
   secondManager.start(socket(waitingHost));
-  assertErrorCode(waitingHost, "NOT_READY");
+  if (lastMessage(waitingHost).type !== "STATE") {
+    throw new Error("一名真人的房间应当自动补 AI 后开始");
+  }
 
   manager.start(socket(host));
   const lateJoin = new FakeSocket();

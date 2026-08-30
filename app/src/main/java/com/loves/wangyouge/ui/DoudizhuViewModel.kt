@@ -27,6 +27,7 @@ import com.loves.wangyouge.network.FriendRequest
 import com.loves.wangyouge.network.InviteLink
 import com.loves.wangyouge.network.OnlineClient
 import com.loves.wangyouge.network.PublicPlayerStats
+import com.loves.wangyouge.network.RoomInvitation
 import com.loves.wangyouge.network.RemoteAction
 import com.loves.wangyouge.network.ServerError
 import com.loves.wangyouge.network.AppUpdateInfo
@@ -54,6 +55,22 @@ data class QuickMessageUi(
     val seat: Int,
     val messageId: String,
     val at: Long
+)
+
+data class ThrowItemUi(
+    val fromSeat: Int,
+    val targetSeat: Int,
+    val item: String,
+    val at: Long
+)
+
+data class InviteFriendsUiState(
+    val roomCode: String,
+    val gameType: RemoteGameType,
+    val friends: List<FriendProfile> = emptyList(),
+    val loading: Boolean = true,
+    val sendingAccountId: String? = null,
+    val error: String? = null
 )
 
 enum class ConnectingAction {
@@ -176,6 +193,7 @@ sealed interface GameUiState {
     data class Friends(
         val friends: List<FriendProfile> = emptyList(),
         val requests: List<FriendRequest> = emptyList(),
+        val roomInvitations: List<RoomInvitation> = emptyList(),
         val searchResults: List<FriendProfile> = emptyList(),
         val query: String = "",
         val loading: Boolean = true,
@@ -236,6 +254,12 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private val _quickMessage = MutableStateFlow<QuickMessageUi?>(null)
     val quickMessage: StateFlow<QuickMessageUi?> = _quickMessage.asStateFlow()
 
+    private val _throwItem = MutableStateFlow<ThrowItemUi?>(null)
+    val throwItem: StateFlow<ThrowItemUi?> = _throwItem.asStateFlow()
+
+    private val _inviteFriends = MutableStateFlow<InviteFriendsUiState?>(null)
+    val inviteFriends: StateFlow<InviteFriendsUiState?> = _inviteFriends.asStateFlow()
+
     private val preferences = application.getSharedPreferences("friend_doudizhu", 0)
     private val authApi = AuthApi()
     private val updateApi = UpdateApi()
@@ -266,6 +290,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
     private var quickMessageJob: Job? = null
+    private var throwItemJob: Job? = null
     private var reconnectAttempt = 0
     private var allowAutomaticReconnect = true
     private var authVerifiedThisProcess = false
@@ -844,17 +869,68 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     private fun loadFriends(query: String = "") {
         val session = authSession ?: return showAuth()
         viewModelScope.launch {
-            when (val result = authApi.friends(httpBaseUrl(lastServerUrl), session.authToken)) {
+            val friendsResult = authApi.friends(httpBaseUrl(lastServerUrl), session.authToken)
+            val invitationsResult = authApi.listRoomInvitations(
+                httpBaseUrl(lastServerUrl),
+                session.authToken
+            )
+            when (friendsResult) {
                 is ApiResult.Success -> {
                     val current = _uiState.value as? GameUiState.Friends ?: return@launch
+                    val invitations = (invitationsResult as? ApiResult.Success)?.data
                     _uiState.value = current.copy(
-                        friends = result.data.friends,
-                        requests = result.data.requests,
+                        friends = friendsResult.data.friends,
+                        requests = friendsResult.data.requests,
+                        roomInvitations = invitations ?: current.roomInvitations,
                         searchResults = if (query == current.query) current.searchResults else emptyList(),
                         loading = false,
                         error = null,
                         actionInFlight = false
                     )
+                }
+                is ApiResult.Failure -> handleFriendsFailure(friendsResult)
+            }
+        }
+    }
+
+    fun acceptRoomInvitation(invitationId: String) {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(actionInFlight = true, error = null)
+        viewModelScope.launch {
+            when (val result = authApi.acceptRoomInvitation(
+                httpBaseUrl(lastServerUrl),
+                session.authToken,
+                invitationId
+            )) {
+                is ApiResult.Success -> {
+                    val invitation = result.data
+                    _toast.value = "已接受邀请，正在加入房间"
+                    _uiState.value = homeState()
+                    if (invitation.gameType == "GOMOKU") {
+                        joinGomokuRoom(invitation.roomCode, lastServerUrl)
+                    } else {
+                        joinRoom(invitation.roomCode, lastServerUrl)
+                    }
+                }
+                is ApiResult.Failure -> handleFriendsFailure(result)
+            }
+        }
+    }
+
+    fun dismissRoomInvitation(invitationId: String) {
+        val session = authSession ?: return showAuth()
+        val current = _uiState.value as? GameUiState.Friends ?: return
+        _uiState.value = current.copy(actionInFlight = true, error = null)
+        viewModelScope.launch {
+            when (val result = authApi.dismissRoomInvitation(
+                httpBaseUrl(lastServerUrl),
+                session.authToken,
+                invitationId
+            )) {
+                is ApiResult.Success -> {
+                    _toast.value = "已忽略房间邀请"
+                    loadFriends(current.query)
                 }
                 is ApiResult.Failure -> handleFriendsFailure(result)
             }
@@ -1009,6 +1085,56 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         _playerProfile.value = PlayerProfileUiState.Hidden
     }
 
+    fun openInviteFriends(gameType: RemoteGameType) {
+        val session = authSession ?: return showAuth()
+        if (roomCode.isBlank()) return showMessage("当前没有可邀请的房间")
+        _inviteFriends.value = InviteFriendsUiState(
+            roomCode = roomCode,
+            gameType = gameType
+        )
+        viewModelScope.launch {
+            when (val result = authApi.friends(httpBaseUrl(lastServerUrl), session.authToken)) {
+                is ApiResult.Success -> _inviteFriends.value = _inviteFriends.value?.copy(
+                    friends = result.data.friends.filter { it.online },
+                    loading = false,
+                    error = null
+                )
+                is ApiResult.Failure -> _inviteFriends.value = _inviteFriends.value?.copy(
+                    loading = false,
+                    error = result.message
+                )
+            }
+        }
+    }
+
+    fun dismissInviteFriends() {
+        _inviteFriends.value = null
+    }
+
+    fun inviteFriend(accountId: String) {
+        val session = authSession ?: return showAuth()
+        val current = _inviteFriends.value ?: return
+        _inviteFriends.value = current.copy(sendingAccountId = accountId, error = null)
+        viewModelScope.launch {
+            when (val result = authApi.createRoomInvitation(
+                httpBaseUrl(lastServerUrl),
+                session.authToken,
+                current.roomCode,
+                current.gameType.name,
+                accountId
+            )) {
+                is ApiResult.Success -> {
+                    _toast.value = "已向好友发送房间邀请"
+                    _inviteFriends.value = _inviteFriends.value?.copy(sendingAccountId = null)
+                }
+                is ApiResult.Failure -> _inviteFriends.value = _inviteFriends.value?.copy(
+                    sendingAccountId = null,
+                    error = result.message
+                )
+            }
+        }
+    }
+
     fun checkForUpdates(manual: Boolean = true) {
         if (_updateState.value is UpdateUiState.Downloading) return
         if (!manual && updateChecked) return
@@ -1080,8 +1206,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     ) {
         val session = authSession ?: return showAuth()
         config = GameConfig(
-            humanCount = 3 - aiCount.coerceIn(0, 2),
-            difficulty = difficulty,
+            humanCount = 3,
+            difficulty = AiDifficulty.HARD,
             mode = config.mode,
             actionTimeoutSeconds = actionTimeoutSeconds
         ).normalized()
@@ -1114,12 +1240,12 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
-    fun createGomokuRoom(serverUrl: String, withAi: Boolean = false) {
+    fun createGomokuRoom(serverUrl: String) {
         val session = authSession ?: return showAuth()
         if (!requirePasswordChanged(session)) return
         config = GameConfig(
-            humanCount = if (withAi) 2 else 3,
-            difficulty = AiDifficulty.MEDIUM,
+            humanCount = 2,
+            difficulty = AiDifficulty.HARD,
             actionTimeoutSeconds = 20
         ).normalized()
         connect(
@@ -1188,6 +1314,16 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
 
     fun sendQuickMessage(messageId: String) {
         onlineClient?.sendQuickMessage(messageId)
+    }
+
+    fun throwItem(targetSeat: Int, item: String) {
+        val playing = _uiState.value as? GameUiState.Playing ?: return
+        if (playing.connection != AppConnectionState.ONLINE) {
+            _toast.value = "正在重连，暂时不能投掷"
+            return
+        }
+        if (targetSeat == playing.mySeat) return
+        onlineClient?.sendThrowItem(targetSeat, item)
     }
 
     fun retryConnection() {
@@ -1503,6 +1639,18 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                         val currentMessage = _quickMessage.value
                         if (currentMessage?.seat == seat && currentMessage.at == at) {
                             _quickMessage.value = null
+                        }
+                    }
+                }
+            },
+            onItemThrown = { fromSeat, targetSeat, item, at ->
+                if (onlineClient === nextClient) {
+                    _throwItem.value = ThrowItemUi(fromSeat, targetSeat, item, at)
+                    throwItemJob?.cancel()
+                    throwItemJob = viewModelScope.launch {
+                        delay(2_200)
+                        if (_throwItem.value?.at == at) {
+                            _throwItem.value = null
                         }
                     }
                 }
@@ -1916,6 +2064,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         heartbeatJob?.cancel()
         onlineClient?.close()
         onlineClient = null
+        throwItemJob?.cancel()
         super.onCleared()
     }
 

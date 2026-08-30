@@ -69,18 +69,12 @@ Deno.test("五子棋房间使用两人配置，并通过统一 STATE 广播服�
   ) {
     throw new Error("Gomoku ROOM metadata is incorrect");
   }
-  manager.start(socket(host));
-  if (latest(host, "ERROR").code !== "NOT_READY") {
-    throw new Error("A Gomoku room must not start before two players join");
-  }
-
   if (!manager.join(socket(guest), code, "guest").ok) {
     throw new Error("Second Gomoku player could not join");
   }
   if (manager.join(socket(third), code, "third").code !== "ROOM_FULL") {
     throw new Error("A Gomoku room accepted a third player");
   }
-
   manager.start(socket(host));
   const initial = gomokuState(host);
   const board = initial.board as number[][];
@@ -120,7 +114,7 @@ Deno.test("五子棋房间使用两人配置，并通过统一 STATE 广播服�
   }
 });
 
-Deno.test("Gomoku AI room starts with one human and responds through the server", async () => {
+Deno.test("Gomoku room starts with one human and fills one AI", async () => {
   const manager = new RoomManager({ persistStats: false, aiDelayMs: 1 });
   const host = new FakeSocket();
   manager.create(
@@ -135,12 +129,8 @@ Deno.test("Gomoku AI room starts with one human and responds through the server"
   );
 
   const created = latest(host, "ROOM");
-  if (
-    created.requiredHumans !== 1 ||
-    created.aiCount !== 1 ||
-    JSON.stringify(created.players) !== JSON.stringify(["host", "棋灵"])
-  ) {
-    throw new Error("Gomoku AI room metadata is incorrect");
+  if (created.requiredHumans !== 2 || created.aiCount !== 0) {
+    throw new Error("Gomoku 等待区没有保留真人空位");
   }
 
   manager.start(socket(host));

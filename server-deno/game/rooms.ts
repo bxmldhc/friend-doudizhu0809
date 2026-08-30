@@ -15,6 +15,7 @@ import { resolveSession } from "./auth.ts";
 import { Pattern } from "./hand.ts";
 import { GomokuEngine } from "./gomoku.ts";
 import { chooseGomokuAiMove } from "./gomoku_ai.ts";
+import type { RoomInvitationEligibility } from "../api.ts";
 
 interface Room {
   code: string;
@@ -38,6 +39,7 @@ interface Room {
   aiCount: number;
   actionTimeoutMs: number;
   quickMessageAt: number[];
+  throwItemAt: number[];
   aiRunning: boolean;
   actionDeadlineAt: number | null;
   turnTimer: ReturnType<typeof setTimeout> | null;
@@ -110,6 +112,8 @@ export const DEFAULT_STALE_ROOM_GRACE_MS = 60_000;
 const DEFAULT_ACTION_TIMEOUT_SECONDS = 20;
 const ALLOWED_ACTION_TIMEOUT_SECONDS = new Set([15, 20, 30, 45]);
 const QUICK_MESSAGE_COOLDOWN_MS = 2_000;
+const THROW_ITEM_COOLDOWN_MS = 8_000;
+const THROW_ITEMS = new Set(["TOMATO", "EGG", "ROSE"]);
 const QUICK_MESSAGE_IDS = new Set([
   "WAIT_A_MOMENT",
   "READY_TO_START",
@@ -150,29 +154,21 @@ export class RoomManager {
   create(
     ws: WebSocket,
     name: string,
-    difficulty: Difficulty,
-    requestedAiCount: number,
+    _difficulty: Difficulty,
+    _requestedAiCount: number,
     requestedPlayerId = "",
     isAuthenticated = false,
     requestedActionTimeoutSeconds = DEFAULT_ACTION_TIMEOUT_SECONDS,
     requestedGameType: GameType = "DOUDIZHU",
   ): string {
     const gameType = requestedGameType;
-    const aiCount = Math.max(
-      0,
-      Math.min(
-        2,
-        Number.isFinite(requestedAiCount) ? Math.floor(requestedAiCount) : 2,
-      ),
-    );
+    // 等候区始终为朋友保留所有座位，只有开局时才补足困难 AI。
+    const aiCount = 0;
+    const difficulty: Difficulty = "HARD";
     let code = "";
     do {
       code = String(Math.floor(100000 + Math.random() * 900000));
     } while (this.rooms.has(code));
-    const gomokuAi = gameType === "GOMOKU" && aiCount > 0;
-    const requiredHumans = gameType === "GOMOKU"
-      ? (gomokuAi ? 1 : 2)
-      : 3 - aiCount;
     const host = this.createParticipant(
       name,
       false,
@@ -182,19 +178,6 @@ export class RoomManager {
     const participants = new Map<string, RoomParticipant>([[host.id, host]]);
     const playerIds: (string | null)[] = [host.id, null, null];
     const names = [name, "等待加入", "等待加入"];
-    if (gameType === "DOUDIZHU") {
-      for (let seat = requiredHumans; seat < 3; seat++) {
-        const ai = this.createParticipant(AI_NAMES[seat], true);
-        participants.set(ai.id, ai);
-        playerIds[seat] = ai.id;
-        names[seat] = ai.name;
-      }
-    } else if (gomokuAi) {
-      const ai = this.createParticipant(GOMOKU_AI_NAME, true);
-      participants.set(ai.id, ai);
-      playerIds[1] = ai.id;
-      names[1] = ai.name;
-    }
     const createdAt = Date.now();
     const actionTimeoutSeconds = ALLOWED_ACTION_TIMEOUT_SECONDS.has(
         requestedActionTimeoutSeconds,
@@ -215,18 +198,15 @@ export class RoomManager {
       participants,
       roundHistory: [],
       lastRecordedGameNumber: 0,
-      readySeats: [0, 1, 2].map((seat) => {
-        if (seat >= this.seatCountForGame(gameType)) return true;
-        const playerId = playerIds[seat];
-        return playerId ? participants.get(playerId)?.isAi === true : false;
-      }),
+      readySeats: [true, true, true],
       engine: null,
       gomoku: null,
       gameType,
       difficulty,
-      aiCount: gameType === "GOMOKU" ? (gomokuAi ? 1 : 0) : aiCount,
+      aiCount,
       actionTimeoutMs: actionTimeoutSeconds * 1_000,
       quickMessageAt: [0, 0, 0],
+      throwItemAt: [0, 0, 0],
       aiRunning: false,
       actionDeadlineAt: null,
       turnTimer: null,
@@ -238,6 +218,59 @@ export class RoomManager {
     this.socketRoom.set(ws, code);
     this.sendRoom(room, 0, ws);
     return code;
+  }
+
+  getRoomInvitationEligibility(input: {
+    roomCode: string;
+    inviterAccountId: string;
+    targetAccountId: string;
+  }): RoomInvitationEligibility {
+    const room = this.rooms.get(input.roomCode.trim());
+    if (!room) {
+      return {
+        ok: false,
+        code: "ROOM_NOT_FOUND",
+        message: "房间不存在或已结束",
+      };
+    }
+    if (room.engine || room.gomoku) {
+      return {
+        ok: false,
+        code: "GAME_ALREADY_STARTED",
+        message: "对局已经开始，暂时不能邀请新玩家",
+      };
+    }
+    const inviterSeat = room.playerIds.findIndex((playerId) =>
+      playerId === input.inviterAccountId
+    );
+    const inviter = inviterSeat >= 0
+      ? room.participants.get(input.inviterAccountId)
+      : null;
+    if (!inviter || inviter.isAi || !inviter.isAuthenticated) {
+      return {
+        ok: false,
+        code: "INVITER_NOT_IN_ROOM",
+        message: "邀请人当前不在这个等待区",
+      };
+    }
+    if (room.playerIds.includes(input.targetAccountId)) {
+      return {
+        ok: false,
+        code: "TARGET_ALREADY_IN_ROOM",
+        message: "这位好友已经在房间中",
+      };
+    }
+    const hasEmptySeat = room.playerIds
+      .slice(0, this.seatCount(room))
+      .some((playerId) => playerId === null);
+    if (!hasEmptySeat) {
+      return {
+        ok: false,
+        code: "ROOM_FULL",
+        message: "等待区已满，无法继续邀请",
+      };
+    }
+    return { ok: true, gameType: room.gameType };
   }
 
   join(
@@ -258,19 +291,8 @@ export class RoomManager {
         message: "游戏已经开始，不能加入",
       };
     }
-    const humanCount = room.sockets
-      .slice(0, this.requiredHumans(room))
-      .filter((s) => s !== null).length;
-    if (humanCount >= this.requiredHumans(room)) {
-      return {
-        ok: false,
-        code: "ROOM_FULL",
-        message: "当前房间真人人数已满",
-      };
-    }
-    const requiredHumans = this.requiredHumans(room);
     const seat = room.sockets.findIndex((s, i) =>
-      i < requiredHumans && s === null
+      i < this.seatCount(room) && s === null && room.playerIds[i] === null
     );
     if (seat < 0) {
       return { ok: false, code: "ROOM_FULL", message: "房间已满" };
@@ -394,6 +416,9 @@ export class RoomManager {
       return;
     }
     if (!this.validateStartPlayers(room, ws)) return;
+    if (!room.engine && !room.gomoku) {
+      this.fillMissingSeatsWithAi(room);
+    }
     if (room.gameType === "GOMOKU") {
       if (!room.gomoku) room.gomoku = new GomokuEngine();
       room.gomoku.startNewGame();
@@ -404,7 +429,7 @@ export class RoomManager {
     }
     if (!room.engine) {
       room.engine = new DoudizhuEngine({
-        humanCount: 3 - room.aiCount,
+        humanCount: this.seatCount(room) - room.aiCount,
         difficulty: room.difficulty,
       });
     }
@@ -537,6 +562,55 @@ export class RoomManager {
     }
   }
 
+  sendThrowItem(ws: WebSocket, targetSeat: number, requestedItem: string) {
+    const room = this.getRoomBySocket(ws);
+    if (!room || room.gameType !== "DOUDIZHU" || !room.engine ||
+      room.engine.state.phase === "FINISHED") {
+      sendError(ws, "INVALID_ACTION", "只能在斗地主对局中投掷");
+      return;
+    }
+    const fromSeat = room.sockets.findIndex((socket) => socket === ws);
+    const item = requestedItem.trim().toUpperCase();
+    if (
+      fromSeat < 0 ||
+      targetSeat < 0 ||
+      targetSeat >= this.seatCount(room) ||
+      targetSeat === fromSeat ||
+      !THROW_ITEMS.has(item)
+    ) {
+      sendError(ws, "INVALID_THROW_ITEM", "投掷目标或道具无效");
+      return;
+    }
+    const sender = room.playerIds[fromSeat]
+      ? room.participants.get(room.playerIds[fromSeat]!)
+      : null;
+    const target = room.playerIds[targetSeat]
+      ? room.participants.get(room.playerIds[targetSeat]!)
+      : null;
+    if (!sender || sender.isAi || !target) {
+      sendError(ws, "INVALID_THROW_ITEM", "当前无法投掷给该玩家");
+      return;
+    }
+    const now = Date.now();
+    if (now - room.throwItemAt[fromSeat] < THROW_ITEM_COOLDOWN_MS) {
+      sendError(ws, "THROW_ITEM_RATE_LIMITED", "投掷太快，请稍后再试");
+      return;
+    }
+    room.throwItemAt[fromSeat] = now;
+    this.touchRoom(room);
+    for (const socket of room.sockets) {
+      if (socket) {
+        send(socket, {
+          type: "ITEM_THROWN",
+          fromSeat,
+          targetSeat,
+          item,
+          at: now,
+        });
+      }
+    }
+  }
+
   action(ws: WebSocket, seat: number, action: RemoteAction) {
     const room = this.getRoomBySocket(ws);
     if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
@@ -621,8 +695,7 @@ export class RoomManager {
     const accounts = new Map<string, AdminOnlineAccountSnapshot>();
 
     for (const room of this.rooms.values()) {
-      const requiredHumans = this.requiredHumans(room);
-      for (let seat = 0; seat < requiredHumans; seat++) {
+      for (let seat = 0; seat < this.seatCount(room); seat++) {
         const socket = room.sockets[seat];
         const playerId = room.playerIds[seat];
         if (
@@ -824,6 +897,14 @@ export class RoomManager {
       case "QUICK_MESSAGE":
         if (!await this.requireSocketIdentity(ws)) break;
         this.sendQuickMessage(ws, String(msg.messageId ?? ""));
+        break;
+      case "THROW_ITEM":
+        if (!await this.requireSocketIdentity(ws)) break;
+        this.sendThrowItem(
+          ws,
+          Number(msg.targetSeat),
+          String(msg.item ?? ""),
+        );
         break;
       case "LEAVE":
         if (!await this.requireSocketIdentity(ws)) break;
@@ -1248,14 +1329,13 @@ export class RoomManager {
   private syncSeatIdentity(room: Room) {
     const engine = room.engine;
     if (!engine) return;
-    const requiredHumans = this.requiredHumans(room);
     engine.state = {
       ...engine.state,
       seats: engine.state.seats.map((seat, index) => {
         const playerId = room.playerIds[index];
         const participant = playerId ? room.participants.get(playerId) : null;
         if (!participant) return seat;
-        const isHumanSeat = index < requiredHumans;
+        const isHumanSeat = !participant.isAi;
         const connected = isHumanSeat && room.sockets[index] !== null;
         return {
           ...seat,
@@ -1347,23 +1427,38 @@ export class RoomManager {
   }
 
   private validateStartPlayers(room: Room, ws: WebSocket): boolean {
-    const requiredHumans = this.requiredHumans(room);
-    const humanCount = room.sockets
-      .slice(0, requiredHumans)
-      .filter((socket) => socket !== null).length;
-    if (humanCount < requiredHumans) {
-      sendError(
-        ws,
-        "NOT_READY",
-        `还需要加入 ${requiredHumans - humanCount} 名真人玩家`,
-      );
-      return false;
-    }
-    if (humanCount > requiredHumans) {
-      sendError(ws, "NOT_READY", "房间真人数量已超过当前 AI 配置");
+    const humanCount = room.playerIds
+      .slice(0, this.seatCount(room))
+      .filter((playerId) => {
+        const participant = playerId ? room.participants.get(playerId) : null;
+        return participant?.isAi === false;
+      }).length;
+    if (humanCount < 1) {
+      sendError(ws, "NOT_READY", "至少需要一名真人玩家才能开始");
       return false;
     }
     return true;
+  }
+
+  private fillMissingSeatsWithAi(room: Room) {
+    const seatCount = this.seatCount(room);
+    for (let seat = 0; seat < seatCount; seat++) {
+      if (room.playerIds[seat] !== null) continue;
+      const name = room.gameType === "GOMOKU"
+        ? GOMOKU_AI_NAME
+        : AI_NAMES[seat] ?? `AI ${seat + 1}`;
+      const ai = this.createParticipant(name, true);
+      room.participants.set(ai.id, ai);
+      room.playerIds[seat] = ai.id;
+      room.names[seat] = ai.name;
+      room.resumeTokens[seat] = null;
+      room.sockets[seat] = null;
+      room.readySeats[seat] = true;
+    }
+    room.aiCount = room.playerIds
+      .slice(0, seatCount)
+      .filter((playerId) => playerId !== null &&
+        room.participants.get(playerId)?.isAi === true).length;
   }
 
   private buildLeaderboard(room: Room): RoomLeaderboardEntry[] {
@@ -1591,7 +1686,8 @@ export class RoomManager {
   }
 
   private requiredHumans(room: Room): number {
-    return room.gameType === "GOMOKU" ? 2 - room.aiCount : 3 - room.aiCount;
+    // 旧客户端仍读取这个字段；现在它表示等候区最多可加入的真人座位数。
+    return this.seatCount(room);
   }
 
   private seatCount(room: Room): number {

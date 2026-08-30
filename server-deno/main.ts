@@ -29,7 +29,10 @@ Deno.serve({ port }, async (req) => {
   if (updateResponse) return updateResponse;
   const inviteResponse = await handleInviteRequest(req);
   if (inviteResponse) return inviteResponse;
-  const apiResponse = await handleApiRequest(req, { roomManager: manager });
+  const apiResponse = await handleApiRequest(req, {
+    roomManager: manager,
+    roomInvitationReader: manager,
+  });
   if (apiResponse) return apiResponse;
   if (url.pathname === "/ws") {
     const { socket, response } = Deno.upgradeWebSocket(req);

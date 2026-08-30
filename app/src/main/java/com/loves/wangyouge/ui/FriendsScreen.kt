@@ -15,11 +15,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -45,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loves.wangyouge.network.FriendProfile
 import com.loves.wangyouge.network.FriendRequest
+import com.loves.wangyouge.network.RoomInvitation
 
 private val FriendsPage = Color(0xFF091F27)
 private val FriendsPanel = Color(0xFF12333B)
@@ -61,7 +65,9 @@ fun FriendsScreen(
     onSendRequest: (String) -> Unit,
     onAccept: (String) -> Unit,
     onReject: (String) -> Unit,
-    onRemove: (String) -> Unit
+    onRemove: (String) -> Unit,
+    onAcceptRoomInvitation: (String) -> Unit,
+    onDismissRoomInvitation: (String) -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var query by remember(state.query) { mutableStateOf(state.query) }
@@ -91,31 +97,24 @@ fun FriendsScreen(
             containerColor = FriendsPanel,
             contentColor = FriendsWax
         ) {
-            Tab(selectedTab == 0, { selectedTab = 0 }, text = { Text("我的好友") })
-            Tab(selectedTab == 1, { selectedTab = 1 }, text = { Text("好友申请") })
-            Tab(selectedTab == 2, { selectedTab = 2 }, text = { Text("添加好友") })
+            Tab(selectedTab == 0, { selectedTab = 0 }, text = { Text("好友") })
+            Tab(selectedTab == 1, { selectedTab = 1 }, text = { Text("收到的申请") })
+            Tab(selectedTab == 2, { selectedTab = 2 }, text = { Text("发出的申请") })
+            Tab(selectedTab == 3, { selectedTab = 3 }, text = { Text("房间邀请") })
         }
-        when {
-            state.loading && state.friends.isEmpty() && state.requests.isEmpty() && state.searchResults.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = FriendsCoral)
-                }
+        if (state.loading && state.friends.isEmpty() && state.requests.isEmpty() &&
+            state.searchResults.isEmpty() && state.roomInvitations.isEmpty()
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = FriendsCoral)
             }
-            selectedTab == 0 -> {
-                FriendList(
+        } else {
+            when (selectedTab) {
+                0 -> FriendList(
                     friends = state.friends,
-                    emptyText = "还没有好友，去添加一位朋友吧",
                     onRemove = { removeTarget = it },
-                    error = state.error
-                )
-            }
-            selectedTab == 1 -> {
-                RequestList(state.requests, state.actionInFlight, onAccept, onReject, state.error)
-            }
-            else -> {
-                AddFriendPanel(
                     query = query,
-                    results = state.searchResults,
+                    searchResults = state.searchResults,
                     loading = state.loading,
                     actionInFlight = state.actionInFlight,
                     onQueryChange = { query = it.take(24) },
@@ -123,12 +122,35 @@ fun FriendsScreen(
                     onSendRequest = onSendRequest,
                     error = state.error
                 )
+                1 -> RequestList(
+                    requests = state.requests.filter { it.direction == "INCOMING" },
+                    emptyText = "暂时没有收到的好友申请",
+                    actionInFlight = state.actionInFlight,
+                    onAccept = onAccept,
+                    onReject = onReject,
+                    error = state.error
+                )
+                2 -> RequestList(
+                    requests = state.requests.filter { it.direction == "OUTGOING" },
+                    emptyText = "暂时没有发出的好友申请",
+                    actionInFlight = state.actionInFlight,
+                    onAccept = onAccept,
+                    onReject = onReject,
+                    error = state.error
+                )
+                else -> RoomInvitationList(
+                    invitations = state.roomInvitations,
+                    actionInFlight = state.actionInFlight,
+                    onAccept = onAcceptRoomInvitation,
+                    onDismiss = onDismissRoomInvitation,
+                    error = state.error
+                )
             }
         }
     }
 
     removeTarget?.let { target ->
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = { removeTarget = null },
             title = { Text("删除好友？") },
             text = { Text("删除后需要重新发送好友申请。") },
@@ -146,8 +168,14 @@ fun FriendsScreen(
 @Composable
 private fun FriendList(
     friends: List<FriendProfile>,
-    emptyText: String,
     onRemove: (FriendProfile) -> Unit,
+    query: String,
+    searchResults: List<FriendProfile>,
+    loading: Boolean,
+    actionInFlight: Boolean,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onSendRequest: (String) -> Unit,
     error: String?
 ) {
     LazyColumn(
@@ -156,6 +184,52 @@ private fun FriendList(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (!error.isNullOrBlank()) item { FriendError(error) }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    label = { Text("输入账号名") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onSearch, enabled = !loading && query.trim().length >= 2) {
+                    Icon(Icons.Default.PersonAdd, null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("添加")
+                }
+            }
+        }
+        if (searchResults.isNotEmpty()) {
+            item { Text("搜索结果", color = FriendsWax, fontWeight = FontWeight.SemiBold) }
+            items(searchResults, key = { "search-${it.accountId}" }) { account ->
+                Surface(color = FriendsPanel, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(account.nickname, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("账号匹配", color = FriendsMuted, fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = { onSendRequest(account.accountId) },
+                            enabled = !actionInFlight
+                        ) { Text("发送申请") }
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                "我的好友 ${friends.size}",
+                color = FriendsWax,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+        }
         items(friends, key = { it.accountId }) { friend ->
             Surface(color = FriendsPanel, modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -165,13 +239,17 @@ private fun FriendList(
                     Box(
                         Modifier.size(38.dp).background(
                             if (friend.online) Color(0xFF7ED9A3) else Color(0xFF60777B),
-                            androidx.compose.foundation.shape.CircleShape
+                            CircleShape
                         )
                     )
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(friend.nickname, color = Color.White, fontWeight = FontWeight.Bold)
-                        Text(if (friend.online) "在线，可邀请加入房间" else "离线", color = FriendsMuted, fontSize = 12.sp)
+                        Text(
+                            if (friend.online) "在线，可邀请加入房间" else "离线",
+                            color = FriendsMuted,
+                            fontSize = 12.sp
+                        )
                     }
                     IconButton(onClick = { onRemove(friend) }) {
                         Icon(Icons.Default.DeleteOutline, "删除好友", tint = FriendsMuted)
@@ -180,7 +258,13 @@ private fun FriendList(
             }
         }
         if (friends.isEmpty()) {
-            item { Text(emptyText, color = FriendsMuted, modifier = Modifier.padding(20.dp)) }
+            item {
+                Text(
+                    "还没有好友，搜索账号名添加一位朋友吧。",
+                    color = FriendsMuted,
+                    modifier = Modifier.padding(20.dp)
+                )
+            }
         }
     }
 }
@@ -188,6 +272,7 @@ private fun FriendList(
 @Composable
 private fun RequestList(
     requests: List<FriendRequest>,
+    emptyText: String,
     actionInFlight: Boolean,
     onAccept: (String) -> Unit,
     onReject: (String) -> Unit,
@@ -229,64 +314,51 @@ private fun RequestList(
                 }
             }
         }
-        if (requests.isEmpty()) {
-            item { Text("暂时没有好友申请", color = FriendsMuted, modifier = Modifier.padding(20.dp)) }
-        }
+        if (requests.isEmpty()) item { Text(emptyText, color = FriendsMuted, modifier = Modifier.padding(20.dp)) }
     }
 }
 
 @Composable
-private fun AddFriendPanel(
-    query: String,
-    results: List<FriendProfile>,
-    loading: Boolean,
+private fun RoomInvitationList(
+    invitations: List<RoomInvitation>,
     actionInFlight: Boolean,
-    onQueryChange: (String) -> Unit,
-    onSearch: () -> Unit,
-    onSendRequest: (String) -> Unit,
+    onAccept: (String) -> Unit,
+    onDismiss: (String) -> Unit,
     error: String?
 ) {
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (!error.isNullOrBlank()) FriendError(error)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                label = { Text("输入账号名") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = onSearch, enabled = !loading && query.trim().length >= 2) {
-                Icon(Icons.Default.PersonAdd, null)
-                Spacer(Modifier.width(4.dp))
-                Text("搜索")
-            }
-        }
-        Text("至少输入 2 个字符，只会显示可添加的账号。", color = FriendsMuted, fontSize = 12.sp)
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(results, key = { it.accountId }) { account ->
-                Surface(color = FriendsPanel, modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(account.nickname, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("账号名匹配", color = FriendsMuted, fontSize = 12.sp)
-                        }
+        if (!error.isNullOrBlank()) item { FriendError(error) }
+        items(invitations, key = { it.invitationId }) { invitation ->
+            Surface(color = FriendsPanel, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    Text(
+                        "${invitation.inviter.nickname} 邀请你加入${if (invitation.gameType == "GOMOKU") "五子棋" else "斗地主"}",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("房间号：${invitation.roomCode}", color = FriendsMuted, fontSize = 13.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
-                            onClick = { onSendRequest(account.accountId) },
+                            onClick = { onDismiss(invitation.invitationId) },
                             enabled = !actionInFlight
-                        ) { Text("加好友") }
+                        ) { Text("忽略") }
+                        Button(
+                            onClick = { onAccept(invitation.invitationId) },
+                            enabled = !actionInFlight
+                        ) { Text("接受并加入") }
                     }
                 }
+            }
+        }
+        if (invitations.isEmpty()) {
+            item {
+                Text("暂时没有房间邀请", color = FriendsMuted, modifier = Modifier.padding(20.dp))
             }
         }
     }
@@ -294,29 +366,16 @@ private fun AddFriendPanel(
 
 @Composable
 private fun FriendError(message: String) {
-    val isServerFeatureUnavailable = message.contains("接口不存在")
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = if (isServerFeatureUnavailable) Color(0xFF203B43) else Color(0xFF482B2D),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        color = Color(0xFF482B2D),
+        shape = RoundedCornerShape(8.dp)
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-            Text(
-                if (isServerFeatureUnavailable) "好友功能暂时不可用" else "操作暂未完成",
-                color = if (isServerFeatureUnavailable) FriendsWax else Color(0xFFF28B78),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                if (isServerFeatureUnavailable) {
-                    "当前连接的服务器还没有好友接口。请更新服务器后点击右上角刷新。"
-                } else {
-                    message
-                },
-                color = FriendsMuted,
-                fontSize = 12.sp
-            )
-        }
+        Text(
+            message,
+            color = Color(0xFFF28B78),
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+        )
     }
 }

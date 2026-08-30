@@ -89,7 +89,9 @@ fun GameScreen(
     onPlayerProfile: (Int) -> Unit,
     onDismissPlayerProfile: () -> Unit,
     playerProfile: PlayerProfileUiState,
-    quickMessage: QuickMessageUi?
+    quickMessage: QuickMessageUi?,
+    onThrowItem: (Int, String) -> Unit,
+    throwItem: ThrowItemUi?
 ) {
     val game = state.state
     val mySeat = game.seats.getOrNull(state.mySeat)
@@ -250,6 +252,13 @@ fun GameScreen(
                 mySeat = state.mySeat
             )
         }
+        throwItem?.let {
+            ThrowItemBubble(
+                item = it.item,
+                targetSeat = it.targetSeat,
+                mySeat = state.mySeat
+            )
+        }
         if (showDisbandConfirm) {
             AlertDialog(
                 onDismissRequest = { showDisbandConfirm = false },
@@ -309,7 +318,14 @@ fun GameScreen(
         if (playerProfile !is PlayerProfileUiState.Hidden) {
             PlayerProfileDialog(
                 state = playerProfile,
-                onDismiss = onDismissPlayerProfile
+                onDismiss = onDismissPlayerProfile,
+                targetSeat = when (val profile = playerProfile) {
+                    is PlayerProfileUiState.Ready ->
+                        game.leaderboard.indexOfFirst { it.playerId == profile.stats.playerId }
+                    else -> -1
+                },
+                mySeat = state.mySeat,
+                onThrowItem = onThrowItem
             )
         }
     }
@@ -985,10 +1001,49 @@ private fun BottomCards(cards: List<Card>, modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun ThrowItemBubble(item: String, targetSeat: Int, mySeat: Int) {
+    val label = when (item) {
+        "TOMATO" -> "番茄"
+        "EGG" -> "鸡蛋"
+        "ROSE" -> "玫瑰"
+        else -> item
+    }
+    val alignment = when {
+        targetSeat == mySeat -> Alignment.BottomCenter
+        targetSeat == 0 -> Alignment.TopStart
+        targetSeat == 1 -> Alignment.TopEnd
+        else -> Alignment.BottomCenter
+    }
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = alignment
+    ) {
+        Surface(
+            modifier = Modifier.padding(18.dp),
+            color = Color(0xE61B3035),
+            shape = RoundedCornerShape(18.dp),
+            shadowElevation = 6.dp
+        ) {
+            Text(
+                text = label,
+                color = Wax,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+            )
+        }
+    }
+}
+
+@Composable
 private fun PlayerProfileDialog(
     state: PlayerProfileUiState,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    targetSeat: Int,
+    mySeat: Int,
+    onThrowItem: (Int, String) -> Unit
 ) {
+    var selectedTab by remember { mutableStateOf(0) }
     val title = when (state) {
         PlayerProfileUiState.Hidden -> return
         is PlayerProfileUiState.Loading -> state.nickname
@@ -1010,6 +1065,7 @@ private fun PlayerProfileDialog(
                 }
                 is PlayerProfileUiState.Unavailable -> Text(state.message)
                 is PlayerProfileUiState.Ready -> {
+                    val canThrow = targetSeat >= 0 && targetSeat != mySeat
                     val games = state.stats.games
                     val winRate = if (games == 0) 0 else state.stats.wins * 100 / games
                     val landlordRate = profileWinRate(
@@ -1021,11 +1077,41 @@ private fun PlayerProfileDialog(
                         state.stats.farmerGames
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ProfileStatRow("历史总得分", state.stats.totalScore.toString())
-                        ProfileStatRow("完成小局", "${state.stats.games}")
-                        ProfileStatRow("总胜率", "$winRate%")
-                        ProfileStatRow("地主胜率", "$landlordRate%")
-                        ProfileStatRow("农民胜率", "$farmerRate%")
+                        if (canThrow) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("资料", "投掷").forEachIndexed { index, label ->
+                                    if (selectedTab == index) {
+                                        Button(onClick = { selectedTab = index }) {
+                                            Text(label)
+                                        }
+                                    } else {
+                                        OutlinedButton(onClick = { selectedTab = index }) {
+                                            Text(label)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (selectedTab == 1 && canThrow) {
+                            Text("选择一个互动道具", color = Muted, fontSize = 12.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("TOMATO" to "番茄", "EGG" to "鸡蛋", "ROSE" to "玫瑰")
+                                    .forEach { (item, label) ->
+                                        OutlinedButton(
+                                            onClick = {
+                                                onThrowItem(targetSeat, item)
+                                                onDismiss()
+                                            }
+                                        ) { Text(label) }
+                                    }
+                            }
+                        } else {
+                            ProfileStatRow("历史总得分", state.stats.totalScore.toString())
+                            ProfileStatRow("完成小局", "${state.stats.games}")
+                            ProfileStatRow("总胜率", "$winRate%")
+                            ProfileStatRow("地主胜率", "$landlordRate%")
+                            ProfileStatRow("农民胜率", "$farmerRate%")
+                        }
                     }
                 }
             }
