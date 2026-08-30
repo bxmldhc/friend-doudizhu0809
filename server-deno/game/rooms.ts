@@ -179,9 +179,9 @@ export class RoomManager {
     const playerIds: (string | null)[] = [host.id, null, null];
     const names = [name, "等待加入", "等待加入"];
     const createdAt = Date.now();
-    const actionTimeoutSeconds = ALLOWED_ACTION_TIMEOUT_SECONDS.has(
-        requestedActionTimeoutSeconds,
-      )
+    const actionTimeoutSeconds = gameType === "GOMOKU"
+      ? DEFAULT_ACTION_TIMEOUT_SECONDS
+      : ALLOWED_ACTION_TIMEOUT_SECONDS.has(requestedActionTimeoutSeconds)
       ? requestedActionTimeoutSeconds
       : DEFAULT_ACTION_TIMEOUT_SECONDS;
     const room: Room = {
@@ -1091,6 +1091,7 @@ export class RoomManager {
                 revision: room.revision,
                 lastEvent: room.lastEvent,
               },
+              room.actionDeadlineAt,
             ),
           });
         }
@@ -1189,6 +1190,17 @@ export class RoomManager {
   private publishState(room: Room) {
     this.cancelTurnTimer(room);
     if (room.gomoku) {
+      if (room.gomoku.state.phase !== "FINISHED") {
+        const version = room.turnVersion;
+        const timeoutMs = this.options.actionTimeoutMs ?? room.actionTimeoutMs;
+        room.actionDeadlineAt = Date.now() + timeoutMs;
+        const timer = setTimeout(
+          () => this.handleGomokuTurnTimeout(room, version),
+          timeoutMs,
+        );
+        room.turnTimer = timer;
+        Deno.unrefTimer(timer);
+      }
       this.broadcastState(room);
       this.scheduleGomokuAi(room);
       return;
@@ -1208,6 +1220,21 @@ export class RoomManager {
     }
     this.broadcastState(room);
     if (engine.isAiTurn()) this.scheduleAi(room);
+  }
+
+  private handleGomokuTurnTimeout(room: Room, version: number) {
+    if (
+      room.turnVersion !== version ||
+      !room.gomoku ||
+      room.gomoku.state.phase !== "PLAYING"
+    ) return;
+    const seat = room.gomoku.state.turnIndex;
+    const playerId = room.playerIds[seat];
+    if (playerId && room.participants.get(playerId)?.isAi === true) return;
+    const move = chooseGomokuAiMove(room.gomoku.state, seat);
+    if (move) {
+      this.applyGomokuMove(room, seat, move.row, move.col, true);
+    }
   }
 
   private scheduleGomokuAi(room: Room) {

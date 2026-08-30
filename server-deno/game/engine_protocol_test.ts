@@ -193,6 +193,43 @@ Deno.test("协议往返保留公开记牌并兼容旧快照", () => {
   }
 });
 
+Deno.test("协议往返保留公开出牌和不出记录并兼容旧快照", () => {
+  const state = playingState();
+  state.playHistory = [
+    {
+      seat: 0,
+      action: "PLAY",
+      cards: [card(3)],
+      patternType: "SINGLE",
+      primary: 3,
+      length: 1,
+    },
+    {
+      seat: 2,
+      action: "PASS",
+      cards: [],
+      patternType: "SINGLE",
+      primary: 3,
+      length: 1,
+    },
+  ];
+  const serialized = serializeState(state, 0);
+  const decoded = deserializeState(serialized);
+  if (
+    decoded.playHistory?.length !== 2 ||
+    decoded.playHistory[0].cards[0].r !== 3 ||
+    decoded.playHistory[1].action !== "PASS" ||
+    decoded.playHistory[1].patternType !== "SINGLE"
+  ) {
+    throw new Error("公开出牌历史协议往返失败");
+  }
+
+  delete serialized.playHistory;
+  if ((deserializeState(serialized).playHistory ?? []).length !== 0) {
+    throw new Error("旧快照缺少公开出牌历史时应兼容为空");
+  }
+});
+
 Deno.test("协议仅在牌局结束后公开三家剩余手牌", () => {
   const playing = playingState();
   const playingSeats = serializeState(playing, 0).seats as Record<

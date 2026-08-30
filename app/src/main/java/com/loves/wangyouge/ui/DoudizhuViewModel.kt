@@ -181,6 +181,7 @@ sealed interface GameUiState {
         val roomCode: String,
         val players: List<String>,
         val isHost: Boolean,
+        val voiceEnabled: Boolean = true,
         val connection: AppConnectionState = AppConnectionState.ONLINE
     ) : GameUiState
 
@@ -1003,6 +1004,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         when (val current = _uiState.value) {
             is GameUiState.Home -> _uiState.value = current.copy(voiceEnabled = enabled)
             is GameUiState.Playing -> _uiState.value = current.copy(voiceEnabled = enabled)
+            is GameUiState.GomokuPlaying -> _uiState.value = current.copy(voiceEnabled = enabled)
             else -> Unit
         }
     }
@@ -1317,12 +1319,22 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun throwItem(targetSeat: Int, item: String) {
-        val playing = _uiState.value as? GameUiState.Playing ?: return
-        if (playing.connection != AppConnectionState.ONLINE) {
+        val current = _uiState.value
+        val connection = when (current) {
+            is GameUiState.Playing -> current.connection
+            is GameUiState.GomokuPlaying -> current.connection
+            else -> return
+        }
+        if (connection != AppConnectionState.ONLINE) {
             _toast.value = "正在重连，暂时不能投掷"
             return
         }
-        if (targetSeat == playing.mySeat) return
+        val mySeat = when (current) {
+            is GameUiState.Playing -> current.mySeat
+            is GameUiState.GomokuPlaying -> current.mySeat
+            else -> return
+        }
+        if (targetSeat == mySeat) return
         onlineClient?.sendThrowItem(targetSeat, item)
     }
 
@@ -1556,6 +1568,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                                 roomCode = code,
                                 players = players,
                                 isHost = isHost,
+                                voiceEnabled = voiceEnabled,
                                 connection = connection
                             )
                             else -> GameUiState.GomokuLobby(
@@ -1619,6 +1632,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                         roomCode = roomCode,
                         players = playerNames,
                         isHost = isHost,
+                        voiceEnabled = voiceEnabled,
                         connection = connection
                     )
                 }

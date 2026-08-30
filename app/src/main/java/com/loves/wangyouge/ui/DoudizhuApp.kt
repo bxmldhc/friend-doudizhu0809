@@ -62,6 +62,7 @@ fun DoudizhuApp(
     val voiceEnabled = when (val state = uiState) {
         is GameUiState.Home -> state.voiceEnabled
         is GameUiState.Playing -> state.voiceEnabled
+        is GameUiState.GomokuPlaying -> state.voiceEnabled
         else -> true
     }
     LaunchedEffect(voiceEnabled) {
@@ -184,6 +185,8 @@ fun DoudizhuApp(
                     onDisband = viewModel::disbandRoom,
                     onQuickMessage = viewModel::sendQuickMessage,
                     quickMessage = quickMessage,
+                    voiceEnabled = state.voiceEnabled,
+                    onVoiceEnabledChange = viewModel::setVoiceEnabled,
                     playerProfile = playerProfile,
                     onPlayerProfile = viewModel::openGomokuPlayerProfile,
                     onDismissPlayerProfile = viewModel::dismissPlayerProfile

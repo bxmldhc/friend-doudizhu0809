@@ -32,6 +32,15 @@ export interface SeatState {
   score: number;
 }
 
+export interface PublicPlayRecord {
+  seat: number;
+  action: "PLAY" | "PASS";
+  cards: Card[];
+  patternType?: ComboType;
+  primary?: number;
+  length?: number;
+}
+
 export interface EngineState {
   phase: Phase;
   seats: SeatState[];
@@ -52,6 +61,8 @@ export interface EngineState {
   multiplier: number;
   /** Publicly played card counts by rank. Never includes hidden hands. */
   seenRanks: Record<number, number>;
+  /** Public play history for AI inference and reconnecting clients. */
+  playHistory?: PublicPlayRecord[];
   winnerIndex: number | null;
   scoreDelta: number[];
   message: string;
@@ -88,6 +99,7 @@ export class DoudizhuEngine {
     passes: 0,
     multiplier: 1,
     seenRanks: {},
+    playHistory: [],
     winnerIndex: null,
     scoreDelta: [],
   };
@@ -148,6 +160,7 @@ export class DoudizhuEngine {
       passes: 0,
       multiplier: 1,
       seenRanks: {},
+      playHistory: [],
       winnerIndex: null,
       scoreDelta: [],
       message,
@@ -247,6 +260,26 @@ export class DoudizhuEngine {
     const lastActionsBySeat = this.state.lastActionsBySeat.map((value, index) =>
       index === this.state.turnIndex ? "PASS" : value
     );
+    const playHistory = [
+      ...(this.state.playHistory ?? []),
+      {
+        seat: this.state.turnIndex,
+        action: "PASS" as const,
+        cards: [] as Card[],
+        ...(this.state.lastPlay.length > 0
+          ? (() => {
+            const pattern = classify(this.state.lastPlay);
+            return pattern
+              ? {
+                patternType: pattern.type,
+                primary: pattern.primary,
+                length: pattern.length,
+              }
+              : {};
+          })()
+          : {}),
+      },
+    ].slice(-120);
     if (this.state.passes + 1 >= 2) {
       this.state = {
         ...this.state,
@@ -255,6 +288,7 @@ export class DoudizhuEngine {
         lastPlay: [],
         lastPlayerIndex: null,
         lastActionsBySeat,
+        playHistory,
         message: `轮到 ${this.state.seats[next].name} 出牌`,
       };
     } else {
@@ -263,6 +297,7 @@ export class DoudizhuEngine {
         turnIndex: next,
         passes: this.state.passes + 1,
         lastActionsBySeat,
+        playHistory,
         message,
       };
     }
@@ -290,6 +325,17 @@ export class DoudizhuEngine {
     const lastActionsBySeat = this.state.lastActionsBySeat.map((value, index) =>
       index === this.state.turnIndex ? "PLAY" : value
     );
+    const playHistory = [
+      ...(this.state.playHistory ?? []),
+      {
+        seat: this.state.turnIndex,
+        action: "PLAY" as const,
+        cards: playedCards,
+        patternType: pattern.type,
+        primary: pattern.primary,
+        length: pattern.length,
+      },
+    ].slice(-120);
 
     if (newHand.length === 0) {
       this.state = {
@@ -303,6 +349,7 @@ export class DoudizhuEngine {
         lastPlaysBySeat,
         lastActionsBySeat,
         seenRanks,
+        playHistory,
         multiplier,
       };
       this.finishGame(this.state.turnIndex, multiplier);
@@ -320,6 +367,7 @@ export class DoudizhuEngine {
       lastPlaysBySeat,
       lastActionsBySeat,
       seenRanks,
+      playHistory,
       passes: 0,
       multiplier,
       message: `${seat.name} 出牌`,
@@ -412,6 +460,7 @@ export class DoudizhuEngine {
       passes: 0,
       multiplier: bidMultiplier,
       seenRanks: {},
+      playHistory: [],
       message: `${newSeats[index].name} 成为地主`,
     };
   }

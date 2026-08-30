@@ -119,6 +119,7 @@ function chooseLeading(
   if (sequences.length > 0) {
     const best = [...sequences].sort(
       (a, b) =>
+        leadStrategyScore(state, hand, b) - leadStrategyScore(state, hand, a) ||
         b.length - a.length ||
         breakPenalty(hand, a) - breakPenalty(hand, b) ||
         primaryOf(a) - primaryOf(b),
@@ -151,6 +152,7 @@ function chooseLeading(
     .filter((play) => classify(play)?.type === "SINGLE")
     .sort(
       (a, b) =>
+        leadStrategyScore(state, hand, b) - leadStrategyScore(state, hand, a) ||
         breakPenalty(hand, a) - breakPenalty(hand, b) ||
         primaryOf(a) - primaryOf(b),
     );
@@ -158,6 +160,43 @@ function chooseLeading(
     type: "play",
     cards: singles[0] ?? leastCostPlay(state, hand, legal),
   };
+}
+
+function leadStrategyScore(
+  state: EngineState,
+  hand: Card[],
+  play: Card[],
+): number {
+  const pattern = classify(play);
+  if (!pattern) return -1000;
+  const landlord = state.landlordIndex;
+  const isLandlord = landlord === state.turnIndex;
+  let score = play.length * (isLandlord ? 3 : 1);
+
+  // Landlord wants to shed cards quickly; farmers prefer to create a safe
+  // handoff and avoid handing the landlord a comfortable response shape.
+  if (isLandlord) {
+    score += Math.max(0, 12 - minTurns(
+      removeCards(hand, play),
+      new Map(),
+      { nodes: 0, limit: hand.length <= 9 ? 5000 : 9000 },
+    )) * 2;
+  } else {
+    score -= sequenceBreakPenalty(hand, play) * 2;
+    if (pattern.type === "SINGLE" && pattern.primary <= 10) score += 2;
+    if (pattern.type === "PAIR" && pattern.primary <= 10) score += 1;
+    const opponent = state.landlordIndex === null
+      ? null
+      : state.seats[state.landlordIndex];
+    if (opponent && opponent.hand.length <= 2 && play.length >= opponent.hand.length) {
+      score += 5;
+    }
+  }
+
+  // If a player repeatedly passes this shape, leading it is often a useful
+  // pressure test. A pass is evidence, not certainty, so keep the weight low.
+  score += passPressure(state, pattern.type, pattern.length) * 0.7;
+  return score;
 }
 
 function chooseResponse(
@@ -171,6 +210,12 @@ function chooseResponse(
 
   const teammateLed = isTeammate(state, state.lastPlayerIndex);
   const danger = opponentDangerCount(state);
+  const inferredPass = passPressure(
+    state,
+    lastPattern.type,
+    lastPattern.length,
+    state.lastPlayerIndex,
+  );
 
   const normal = legal.filter((play) => !isBomb(play));
   const bombs = legal.filter(isBomb).sort(
@@ -223,7 +268,14 @@ function chooseResponse(
   }
 
   if (lastPattern.type === "SINGLE") {
-    return chooseSingleResponse(state, hand, normal, bombs, lastPattern);
+    return chooseSingleResponse(
+      state,
+      hand,
+      normal,
+      bombs,
+      lastPattern,
+      inferredPass,
+    );
   }
   if (lastPattern.type === "PAIR") {
     return choosePairResponse(state, hand, normal, bombs, lastPattern);
@@ -243,12 +295,14 @@ function chooseSingleResponse(
   normal: Card[][],
   bombs: Card[][],
   lastPattern: Pattern,
+  inferredPass = 0,
 ): AiAction {
   const singles = normal
     .filter((play) => classify(play)?.type === "SINGLE")
     .sort(
       (a, b) =>
-        breakPenalty(hand, a) - breakPenalty(hand, b) ||
+      breakPenalty(hand, a) - breakPenalty(hand, b) ||
+        (inferredPass > 0 ? primaryOf(a) - primaryOf(b) : 0) ||
         primaryOf(a) - primaryOf(b),
     );
   if (singles.length > 0) {
@@ -268,6 +322,21 @@ function chooseSingleResponse(
     return { type: "play", cards: bombs[0] };
   }
   return { type: "pass" };
+}
+
+function passPressure(
+  state: EngineState,
+  type: ComboType,
+  length: number,
+  seat?: number | null,
+): number {
+  const history = state.playHistory ?? [];
+  return history.reduce((score, entry) => {
+    if (entry.action !== "PASS") return score;
+    if (entry.patternType !== type || entry.length !== length) return score;
+    if (seat !== undefined && entry.seat !== seat) return score;
+    return score + (entry.seat === state.landlordIndex ? 1.4 : 1);
+  }, 0);
 }
 
 function choosePairResponse(

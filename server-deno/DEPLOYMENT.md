@@ -9,7 +9,7 @@
 - 斗地主、五子棋等内置游戏的小修复：第三位增加，例如 `1.0.1`
 - 每次发布必须同时增加 `versionCode`
 
-本轮版本为 `1.1.0`，`versionCode` 为 `11`。
+本轮版本示例为 `1.1.2`，`versionCode` 为 `13`。实际发布时请以本次 APK 的版本信息和 SHA256 为准。
 
 ### 1. 本地构建
 
@@ -54,9 +54,9 @@ ls -lh /home/admin/wangyouge-1.1.0.apk
 ```bash
 cd /opt/friend-doudizhu-server
 git pull --ff-only origin main
-sudo mv /home/admin/wangyouge-1.1.0.apk /opt/friend-doudizhu-server/releases/
-sudo chown admin:admin /opt/friend-doudizhu-server/releases/wangyouge-1.1.0.apk
-printf '%s\n' '{"versionCode":11,"versionName":"1.1.0","apkFile":"wangyouge-1.1.0.apk","sha256":"ACTUAL_SHA256","forceUpdate":false,"releaseNotes":["累计战绩与真人对局过滤","等待区好友邀请","好友申请分类","开局自动补位 AI","优化农民 AI 配合","新增番茄、鸡蛋、玫瑰互动"]}' | sudo tee /opt/friend-doudizhu-server/releases/latest.json > /dev/null
+sudo mv /home/admin/wangyouge-1.1.2.apk /opt/friend-doudizhu-server/releases/
+sudo chown admin:admin /opt/friend-doudizhu-server/releases/wangyouge-1.1.2.apk
+printf '%s\n' '{"versionCode":13,"versionName":"1.1.2","apkFile":"wangyouge-1.1.2.apk","sha256":"ACTUAL_SHA256","forceUpdate":false,"releaseNotes":["增强斗地主 AI 的牌力评估与队友配合","增强 AI 的公共出牌记忆与 PASS 推断","五子棋头像区显示当前回合","五子棋每回合限制 20 秒，超时自动落子"]}' | sudo tee /opt/friend-doudizhu-server/releases/latest.json > /dev/null
 sudo systemctl restart friend-doudizhu
 curl http://127.0.0.1:18080/api/app/latest
 ```

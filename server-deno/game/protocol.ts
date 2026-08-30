@@ -1,5 +1,11 @@
 import { Card, cardNotation, parseCards } from "./cards.ts";
-import { EngineState, Phase, SeatAction, SeatState } from "./engine.ts";
+import {
+  EngineState,
+  Phase,
+  PublicPlayRecord,
+  SeatAction,
+  SeatState,
+} from "./engine.ts";
 import { Difficulty } from "./engine.ts";
 import { ComboType } from "./hand.ts";
 import { GomokuState } from "./gomoku.ts";
@@ -147,6 +153,10 @@ export function serializeState(
       : state.bottomCards.map(cardNotation),
     multiplier: state.multiplier,
     seenRanks: state.seenRanks,
+    playHistory: (state.playHistory ?? []).map((entry) => ({
+      ...entry,
+      cards: entry.cards.map(cardNotation),
+    })),
     winnerIndex: state.winnerIndex,
     scoreDelta: state.scoreDelta,
     message: state.message,
@@ -185,6 +195,33 @@ export function deserializeState(obj: Record<string, unknown>): EngineState {
     const action = rawLastActions[index];
     return typeof action === "string" ? action as SeatAction : null;
   });
+  const rawPlayHistory = Array.isArray(obj.playHistory)
+    ? obj.playHistory
+    : [];
+  const playHistory: PublicPlayRecord[] = rawPlayHistory.flatMap(
+    (value): PublicPlayRecord[] => {
+    if (!value || typeof value !== "object") return [];
+    const entry = value as Record<string, unknown>;
+    const seat = typeof entry.seat === "number" ? entry.seat : -1;
+    const action: "PLAY" | "PASS" | null =
+      entry.action === "PLAY" || entry.action === "PASS"
+        ? entry.action
+        : null;
+    if (seat < 0 || seat > 2 || !action) return [];
+    return [{
+      seat,
+      action,
+      cards: parseCards(
+        Array.isArray(entry.cards) ? entry.cards as string[] : [],
+      ),
+      ...(typeof entry.patternType === "string"
+        ? { patternType: entry.patternType as ComboType }
+        : {}),
+      ...(typeof entry.primary === "number" ? { primary: entry.primary } : {}),
+      ...(typeof entry.length === "number" ? { length: entry.length } : {}),
+    }];
+    },
+  );
   return {
     phase: obj.phase as Phase,
     seats,
@@ -211,6 +248,7 @@ export function deserializeState(obj: Record<string, unknown>): EngineState {
     ),
     multiplier: obj.multiplier as number,
     seenRanks: parseSeenRanks(obj.seenRanks),
+    playHistory,
     winnerIndex: obj.winnerIndex as number | null,
     scoreDelta: obj.scoreDelta as number[],
     message: obj.message as string,
@@ -226,6 +264,7 @@ export function serializeGomokuState(
   scores: number[] = [],
   playerIds: Array<string | null> = [],
   roomContext: RoomStateContext | null = null,
+  actionDeadlineAt: number | null = null,
 ): Record<string, unknown> {
   return {
     gameType: "GOMOKU",
@@ -249,7 +288,7 @@ export function serializeGomokuState(
     moveCount: state.moveCount,
     message: state.message,
     gameNumber: state.gameNumber,
-    actionDeadlineAt: null,
+    actionDeadlineAt,
     leaderboard: roomContext?.leaderboard ?? [],
     roundHistory: roomContext?.roundHistory ?? [],
     readySeats: (roomContext?.readySeats ?? [false, false]).slice(0, 2),

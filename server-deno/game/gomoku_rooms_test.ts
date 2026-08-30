@@ -159,6 +159,52 @@ Deno.test("Gomoku room starts with one human and fills one AI", async () => {
   }
 });
 
+Deno.test("Gomoku always uses a 20 second deadline and times out with an automatic legal move", async () => {
+  const manager = new RoomManager({
+    persistStats: false,
+    actionTimeoutMs: 20,
+    aiDelayMs: 1,
+  });
+  const host = new FakeSocket();
+  const guest = new FakeSocket();
+  const code = manager.create(
+    socket(host),
+    "host",
+    "MEDIUM",
+    0,
+    "",
+    false,
+    45,
+    "GOMOKU",
+  );
+  manager.join(socket(guest), code, "guest");
+
+  const internal = manager as unknown as {
+    rooms: Map<string, { actionTimeoutMs: number }>;
+  };
+  if (internal.rooms.get(code)?.actionTimeoutMs !== 20_000) {
+    throw new Error("Gomoku room did not force the 20 second turn setting");
+  }
+
+  manager.start(socket(host));
+  const initial = gomokuState(host);
+  if (typeof initial.actionDeadlineAt !== "number") {
+    throw new Error("Gomoku state did not include an action deadline");
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const afterTimeout = gomokuState(host);
+  const event = afterTimeout.lastEvent as Record<string, unknown>;
+  if (
+    afterTimeout.moveCount !== 1 ||
+    event.type !== "GOMOKU_MOVE" ||
+    event.seat !== 0 ||
+    event.automatic !== true
+  ) {
+    throw new Error("Timed out Gomoku player did not receive an automatic move");
+  }
+});
+
 Deno.test("五子棋由服务端确认五连、结算准备和房主重开", () => {
   const manager = new RoomManager({ persistStats: false });
   const host = new FakeSocket();

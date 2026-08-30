@@ -263,7 +263,10 @@ object GameProtocol {
             moveCount = obj.optInt("moveCount", 0),
             message = obj.optString("message"),
             gameNumber = obj.optInt("gameNumber", 0),
-            readySeats = ready
+            readySeats = ready,
+            actionDeadlineAt = if (
+                obj.has("actionDeadlineAt") && !obj.isNull("actionDeadlineAt")
+            ) obj.optLong("actionDeadlineAt") else null
         )
     }
 }

@@ -43,5 +43,6 @@ data class GomokuState(
     val moveCount: Int,
     val message: String,
     val gameNumber: Int,
-    val readySeats: List<Boolean>
+    val readySeats: List<Boolean>,
+    val actionDeadlineAt: Long? = null
 )
