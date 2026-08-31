@@ -1,6 +1,8 @@
 package com.loves.wangyouge.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,13 +36,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -104,7 +109,13 @@ fun Game2048Screen(
                     (0 until 4).forEach { column ->
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             (0 until 4).forEach { row ->
-                                Tile(state.state.cells[row * 4 + column], Modifier.weight(1f).fillMaxWidth())
+                                val index = row * 4 + column
+                                Tile(
+                                    value = state.state.cells[index],
+                                    isNew = state.state.newTileIndex == index,
+                                    isMerged = index in state.state.mergedTileIndices,
+                                    modifier = Modifier.weight(1f).fillMaxWidth()
+                                )
                             }
                         }
                     }
@@ -145,16 +156,47 @@ fun Game2048Screen(
 }
 
 @Composable
-private fun Tile(value: Int, modifier: Modifier) {
-    val color = when {
-        value == 0 -> Empty
-        value <= 64 -> Color(0xFFBD6B3C)
-        value <= 512 -> Color(0xFFD1AD5C)
-        else -> Color(0xFF547C61)
+private fun Tile(value: Int, isNew: Boolean, isMerged: Boolean, modifier: Modifier) {
+    var settled by remember(value, isNew, isMerged) { mutableStateOf(!(isNew || isMerged)) }
+    LaunchedEffect(value, isNew, isMerged) {
+        if (isNew || isMerged) {
+            settled = false
+            delay(16)
+            settled = true
+        }
     }
-    Box(modifier.background(color, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-        if (value != 0) Text(value.toString(), color = Color.White, fontSize = when { value >= 1024 -> 20.sp; value >= 128 -> 24.sp; else -> 30.sp })
+    val scale by animateFloatAsState(
+        targetValue = if (settled) 1f else if (isMerged) 1.15f else .68f,
+        animationSpec = tween(180),
+        label = "2048-tile-scale"
+    )
+    val color = tileColor(value)
+    Box(
+        modifier.graphicsLayer { scaleX = scale; scaleY = scale }
+            .background(color, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (value != 0) Text(
+            value.toString(),
+            color = if (value <= 4) Color(0xFF282722) else Color.White,
+            fontSize = when { value >= 1024 -> 20.sp; value >= 128 -> 24.sp; else -> 30.sp }
+        )
     }
+}
+
+private fun tileColor(value: Int): Color = when (value) {
+    0 -> Empty
+    2 -> Color(0xFFF1E6D4)
+    4 -> Color(0xFFEAD7BD)
+    8 -> Color(0xFFD99D70)
+    16 -> Color(0xFFCB8153)
+    32 -> Color(0xFFBD6B3C)
+    64 -> Color(0xFFA95038)
+    128 -> Color(0xFFD1AD5C)
+    256 -> Color(0xFFBD9440)
+    512 -> Color(0xFF9A7939)
+    1024 -> Color(0xFF6A855F)
+    else -> Color(0xFF547C61)
 }
 
 @Composable

@@ -7,7 +7,9 @@ data class Game2048State(
     val score: Int = 0,
     val moves: Int = 0,
     val won: Boolean = false,
-    val ended: Boolean = false
+    val ended: Boolean = false,
+    val newTileIndex: Int = -1,
+    val mergedTileIndices: Set<Int> = emptySet()
 ) {
     val maxTile: Int get() = cells.maxOrNull() ?: 0
 }
@@ -24,29 +26,38 @@ object Game2048 {
     fun move(state: Game2048State, direction: Move2048, random: Random = Random.Default): Game2048State {
         if (state.ended) return state
         val next = MutableList(16) { 0 }
+        val mergedIndices = mutableSetOf<Int>()
         var changed = false
         var gained = 0
         for (line in 0 until 4) {
             val ids = lineIds(line, direction)
             val values = ids.map { state.cells[it] }.filter { it != 0 }
-            val merged = mutableListOf<Int>()
+            val merged = mutableListOf<Pair<Int, Boolean>>()
             var index = 0
             while (index < values.size) {
                 if (index + 1 < values.size && values[index] == values[index + 1]) {
                     val value = values[index] * 2
-                    merged += value
+                    merged += value to true
                     gained += value
                     index += 2
                 } else {
-                    merged += values[index]
+                    merged += values[index] to false
                     index++
                 }
             }
-            ids.forEachIndexed { i, id -> next[id] = merged.getOrNull(i) ?: 0 }
+            ids.forEachIndexed { i, id ->
+                next[id] = merged.getOrNull(i)?.first ?: 0
+                if (merged.getOrNull(i)?.second == true) mergedIndices += id
+            }
             if (ids.map { state.cells[it] } != ids.map { next[it] }) changed = true
         }
         if (!changed) return state
-        var result = state.copy(cells = next, score = state.score + gained, moves = state.moves + 1)
+        var result = state.copy(
+            cells = next,
+            score = state.score + gained,
+            moves = state.moves + 1,
+            mergedTileIndices = mergedIndices
+        )
         result = addTile(result, random)
         return result.copy(
             won = state.won || result.cells.any { it >= 2048 },
@@ -58,8 +69,9 @@ object Game2048 {
         val empty = state.cells.indices.filter { state.cells[it] == 0 }
         if (empty.isEmpty()) return state
         val cells = state.cells.toMutableList()
-        cells[empty[random.nextInt(empty.size)]] = if (random.nextFloat() < .9f) 2 else 4
-        return state.copy(cells = cells)
+        val index = empty[random.nextInt(empty.size)]
+        cells[index] = if (random.nextFloat() < .9f) 2 else 4
+        return state.copy(cells = cells, newTileIndex = index)
     }
 
     private fun lineIds(line: Int, direction: Move2048): List<Int> = when (direction) {
