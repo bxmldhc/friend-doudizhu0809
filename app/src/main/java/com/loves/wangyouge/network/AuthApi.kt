@@ -488,6 +488,19 @@ class AuthApi(
         )
     }
 
+    suspend fun leaderboard2048(baseUrl: String, authToken: String): ApiResult<List<Leaderboard2048Entry>> = execute(
+        request = jsonRequest(baseUrl, "/api/games/2048/leaderboard", "GET", authToken = authToken),
+        parser = AuthResponseParser::parse2048Leaderboard
+    )
+
+    suspend fun submit2048Score(baseUrl: String, authToken: String, score: Int, maxTile: Int, moves: Int): ApiResult<Leaderboard2048Entry> = execute(
+        request = jsonRequest(
+            baseUrl, "/api/games/2048/score", "POST",
+            JSONObject().put("score", score).put("maxTile", maxTile).put("moves", moves), authToken
+        ),
+        parser = AuthResponseParser::parse2048Entry
+    )
+
     suspend fun playerStats(
         baseUrl: String,
         authToken: String,
@@ -774,6 +787,21 @@ class AuthApi(
 }
 
 internal object AuthResponseParser {
+    fun parse2048Leaderboard(root: JSONObject): List<Leaderboard2048Entry> {
+        val data = root.optJSONObject("data") ?: root
+        val entries = data.optJSONArray("entries") ?: return emptyList()
+        return List(entries.length()) { parse2048Entry(entries.getJSONObject(it)) }
+    }
+
+    fun parse2048Entry(root: JSONObject): Leaderboard2048Entry {
+        val data = root.optJSONObject("data")
+        val item = root.optJSONObject("entry") ?: data?.optJSONObject("entry") ?: data ?: root
+        return Leaderboard2048Entry(
+            playerId = item.optString("playerId"), name = item.optString("name"),
+            score = item.optInt("score"), maxTile = item.optInt("maxTile"),
+            moves = item.optInt("moves"), updatedAt = item.optLong("updatedAt")
+        )
+    }
     fun parseSession(root: JSONObject, fallbackToken: String = ""): AuthSession {
         val data = root.optJSONObject("data") ?: root
         val account = data.optJSONObject("account")

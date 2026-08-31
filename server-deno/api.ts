@@ -23,9 +23,11 @@ import type {
 } from "./game/rooms.ts";
 import {
   getRecentMatches,
+  get2048Leaderboard,
   getStats,
   listAdminAudit,
   recordAdminAudit,
+  submit2048Score,
 } from "./game/store.ts";
 import {
   acceptFriendRequest,
@@ -165,6 +167,24 @@ export async function handleApiRequest(
           recentMatches,
         },
       });
+    }
+    if (req.method === "GET" && url.pathname === "/api/games/2048/leaderboard") {
+      const { account } = await requireAccount(req);
+      const limit = parseLimit(url.searchParams.get("limit"));
+      const entries = await get2048Leaderboard(limit);
+      return json({ ok: true, data: { entries, playerId: account.accountId } });
+    }
+    if (req.method === "POST" && url.pathname === "/api/games/2048/score") {
+      const { account } = await requireAccount(req);
+      const body = await readJsonObject(req);
+      const score = Number(body.score);
+      const maxTile = Number(body.maxTile ?? 0);
+      const moves = Number(body.moves ?? 0);
+      if (![score, maxTile, moves].every(Number.isFinite) || score < 0 || maxTile < 0 || moves < 0) {
+        throw new AuthError("2048成绩格式错误", "INVALID_2048_SCORE", 400);
+      }
+      const entry = await submit2048Score(account.accountId, account.nickname, score, maxTile, moves);
+      return json({ ok: true, data: { entry } });
     }
     if (req.method === "GET" && url.pathname === "/api/friends") {
       const { account } = await requireAccount(req);

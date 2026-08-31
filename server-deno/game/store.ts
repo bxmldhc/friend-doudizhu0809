@@ -23,6 +23,15 @@ export interface GameStats {
   farmerWins: number;
 }
 
+export interface GameLeaderboardEntry {
+  playerId: string;
+  name: string;
+  score: number;
+  maxTile: number;
+  moves: number;
+  updatedAt: number;
+}
+
 export interface PlayerScoreDelta {
   playerId: string;
   name: string;
@@ -150,6 +159,45 @@ export async function getStats(playerId: string): Promise<PlayerStats | null> {
   });
   applyAggregateStats(normalized);
   return normalized;
+}
+
+export async function submit2048Score(
+  playerId: string,
+  name: string,
+  score: number,
+  maxTile: number,
+  moves: number,
+): Promise<GameLeaderboardEntry> {
+  const key = ["leaderboard", "2048", playerId];
+  const cleanScore = Math.max(0, Math.floor(score));
+  const cleanTile = Math.max(0, Math.floor(maxTile));
+  const cleanMoves = Math.max(0, Math.floor(moves));
+  while (true) {
+    const current = await kv.get<GameLeaderboardEntry>(key);
+    const previous = current.value;
+    const next: GameLeaderboardEntry = previous && previous.score >= cleanScore
+      ? { ...previous, name, updatedAt: Date.now() }
+      : {
+        playerId,
+        name,
+        score: cleanScore,
+        maxTile: cleanTile,
+        moves: cleanMoves,
+        updatedAt: Date.now(),
+      };
+    const committed = await kv.atomic().check(current).set(key, next).commit();
+    if (committed.ok) return next;
+  }
+}
+
+export async function get2048Leaderboard(limit = 20): Promise<GameLeaderboardEntry[]> {
+  const entries: GameLeaderboardEntry[] = [];
+  for await (const entry of kv.list<GameLeaderboardEntry>(
+    { prefix: ["leaderboard", "2048"] },
+  )) entries.push(entry.value);
+  return entries
+    .sort((left, right) => right.score - left.score || right.maxTile - left.maxTile || left.name.localeCompare(right.name, "zh-CN"))
+    .slice(0, Math.max(1, Math.min(100, Math.floor(limit))));
 }
 
 function normalizePlayerStats(

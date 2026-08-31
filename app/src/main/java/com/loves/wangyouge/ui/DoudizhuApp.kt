@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.loves.wangyouge.audio.GameVoicePlayer
 import com.loves.wangyouge.model.RemoteGameType
+import com.loves.wangyouge.logic.Move2048
 import com.loves.wangyouge.update.UpdateInstaller
 import com.loves.wangyouge.ui.theme.DoudizhuTheme
 import kotlinx.coroutines.delay
@@ -98,6 +99,7 @@ fun DoudizhuApp(
                     onJoin = viewModel::openJoinRoom,
                     onCreateGomoku = viewModel::openGomoku,
                     onJoinGomoku = { room -> viewModel.joinGomokuRoom(room, state.serverUrl) },
+                    onOpen2048 = viewModel::open2048,
                     onHistory = viewModel::openHistory,
                     onFriends = viewModel::openFriends,
                     onResume = viewModel::resumeSavedRoom,
@@ -190,6 +192,13 @@ fun DoudizhuApp(
                     playerProfile = playerProfile,
                     onPlayerProfile = viewModel::openGomokuPlayerProfile,
                     onDismissPlayerProfile = viewModel::dismissPlayerProfile
+                )
+                is GameUiState.Game2048 -> Game2048Screen(
+                    state = state,
+                    onBack = viewModel::backHome,
+                    onMove = viewModel::move2048,
+                    onRestart = viewModel::restart2048,
+                    onLeaderboard = viewModel::load2048Leaderboard
                 )
                 is GameUiState.History -> HistoryScreen(
                     stats = state.stats,

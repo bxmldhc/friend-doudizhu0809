@@ -7,6 +7,9 @@ import com.loves.wangyouge.BuildConfig
 import com.loves.wangyouge.audio.AudioCue
 import com.loves.wangyouge.audio.VoiceEventReducer
 import com.loves.wangyouge.logic.EngineState
+import com.loves.wangyouge.logic.Game2048
+import com.loves.wangyouge.logic.Game2048State
+import com.loves.wangyouge.logic.Move2048
 import com.loves.wangyouge.model.AiDifficulty
 import com.loves.wangyouge.model.Card
 import com.loves.wangyouge.model.GameConfig
@@ -32,6 +35,7 @@ import com.loves.wangyouge.network.RemoteAction
 import com.loves.wangyouge.network.ServerError
 import com.loves.wangyouge.network.AppUpdateInfo
 import com.loves.wangyouge.network.UpdateApi
+import com.loves.wangyouge.network.Leaderboard2048Entry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -228,6 +232,15 @@ sealed interface GameUiState {
         val resettingAccountId: String? = null,
         val updatingAccountId: String? = null,
         val updatingRegistration: Boolean = false
+    ) : GameUiState
+
+    data class Game2048(
+        val state: Game2048State,
+        val bestScore: Int = 0,
+        val leaderboard: List<Leaderboard2048Entry> = emptyList(),
+        val leaderboardLoading: Boolean = false,
+        val leaderboardError: String? = null,
+        val submitLoading: Boolean = false
     ) : GameUiState
 }
 
@@ -461,6 +474,67 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     fun openHistory() {
         _uiState.value = GameUiState.History()
         loadHistory()
+    }
+
+    fun open2048() {
+        val session = authSession ?: return showAuth()
+        if (!requirePasswordChanged(session)) return
+        val best = preferences.getInt("2048BestScore", 0)
+        _uiState.value = GameUiState.Game2048(
+            state = Game2048.newGame(),
+            bestScore = best,
+            leaderboardLoading = true
+        )
+        load2048Leaderboard()
+    }
+
+    fun move2048(direction: Move2048) {
+        val current = _uiState.value as? GameUiState.Game2048 ?: return
+        val next = Game2048.move(current.state, direction)
+        if (next == current.state) return
+        val best = maxOf(current.bestScore, next.score)
+        preferences.edit().putInt("2048BestScore", best).apply()
+        _uiState.value = current.copy(state = next, bestScore = best)
+        if (next.ended || next.won) submit2048(next)
+    }
+
+    fun restart2048() {
+        val current = _uiState.value as? GameUiState.Game2048 ?: return
+        _uiState.value = current.copy(state = Game2048.newGame())
+    }
+
+    fun load2048Leaderboard() {
+        val current = _uiState.value as? GameUiState.Game2048 ?: return
+        val session = authSession ?: return showAuth()
+        _uiState.value = current.copy(leaderboardLoading = true, leaderboardError = null)
+        viewModelScope.launch {
+            when (val result = authApi.leaderboard2048(httpBaseUrl(lastServerUrl), session.authToken)) {
+                is ApiResult.Success -> (_uiState.value as? GameUiState.Game2048)?.let {
+                    _uiState.value = it.copy(leaderboard = result.data, leaderboardLoading = false)
+                }
+                is ApiResult.Failure -> (_uiState.value as? GameUiState.Game2048)?.let {
+                    _uiState.value = it.copy(leaderboardLoading = false, leaderboardError = result.message)
+                }
+            }
+        }
+    }
+
+    private fun submit2048(state: Game2048State) {
+        val session = authSession ?: return
+        val current = _uiState.value as? GameUiState.Game2048 ?: return
+        if (state.score <= 0 || current.submitLoading) return
+        _uiState.value = current.copy(submitLoading = true)
+        viewModelScope.launch {
+            when (val result = authApi.submit2048Score(httpBaseUrl(lastServerUrl), session.authToken, state.score, state.maxTile, state.moves)) {
+                is ApiResult.Success -> (_uiState.value as? GameUiState.Game2048)?.let {
+                    _uiState.value = it.copy(submitLoading = false)
+                    load2048Leaderboard()
+                }
+                is ApiResult.Failure -> (_uiState.value as? GameUiState.Game2048)?.let {
+                    _uiState.value = it.copy(submitLoading = false)
+                }
+            }
+        }
     }
 
     fun openFriends() {

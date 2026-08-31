@@ -56,7 +56,8 @@ private val Negative = Color(0xFFF28B78)
 
 private enum class HistoryGame(val wire: String, val label: String) {
     DOUDIZHU("DOUDIZHU", "斗地主"),
-    GOMOKU("GOMOKU", "五子棋")
+    GOMOKU("GOMOKU", "五子棋"),
+    GAME_2048("2048", "2048")
 }
 
 @Composable

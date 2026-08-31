@@ -120,6 +120,7 @@ fun HomeScreen(
     onJoin: () -> Unit,
     onCreateGomoku: () -> Unit,
     onJoinGomoku: (String) -> Unit,
+    onOpen2048: () -> Unit,
     onHistory: () -> Unit,
     onFriends: () -> Unit,
     onResume: () -> Unit,
@@ -251,7 +252,8 @@ fun HomeScreen(
                         resumeRoomCode = state.resumeRoomCode,
                         resumeSavedAt = state.resumeSavedAt,
                         onCreateGomoku = onCreateGomoku,
-                        onJoinGomoku = { onJoinGomoku(gomokuRoomCode) }
+                        onJoinGomoku = { onJoinGomoku(gomokuRoomCode) },
+                        onOpen2048 = onOpen2048
                     )
                     Row(
                         modifier = Modifier
@@ -273,6 +275,14 @@ fun HomeScreen(
                                 imageRes = R.drawable.wangyouge_game_gomoku,
                                 title = "五子棋",
                                 onClick = { selectedGame = HomeGame.GOMOKU }
+                            )
+                        }
+                        if (selectedGame != HomeGame.GAME_2048) {
+                            HomeGameTile(
+                                modifier = Modifier.width(if (compact) 112.dp else 138.dp),
+                                imageRes = R.drawable.wangyouge_game_more,
+                                title = "2048",
+                                onClick = { selectedGame = HomeGame.GAME_2048 }
                             )
                         }
                         HomeGameTile(
@@ -319,7 +329,8 @@ fun HomeScreen(
 
 private enum class HomeGame {
     DOUDIZHU,
-    GOMOKU
+    GOMOKU,
+    GAME_2048
 }
 
 @Composable
@@ -334,12 +345,14 @@ private fun HomeGameHero(
     resumeRoomCode: String?,
     resumeSavedAt: Long?,
     onCreateGomoku: () -> Unit,
-    onJoinGomoku: () -> Unit
+    onJoinGomoku: () -> Unit,
+    onOpen2048: () -> Unit
 ) {
     val isDoudizhu = selectedGame == HomeGame.DOUDIZHU
-    val title = if (isDoudizhu) "好友斗地主" else "五子棋"
-    val detail = if (isDoudizhu) "三人联机，支持 AI 补位" else "双人联机，黑方先行"
-    val imageRes = if (isDoudizhu) R.drawable.wangyouge_game_doudizhu else R.drawable.wangyouge_game_gomoku
+    val isGomoku = selectedGame == HomeGame.GOMOKU
+    val title = when (selectedGame) { HomeGame.DOUDIZHU -> "好友斗地主"; HomeGame.GOMOKU -> "五子棋"; HomeGame.GAME_2048 -> "2048" }
+    val detail = when (selectedGame) { HomeGame.DOUDIZHU -> "三人联机，支持 AI 补位"; HomeGame.GOMOKU -> "双人联机，黑方先行"; HomeGame.GAME_2048 -> "单人游戏，挑战最高分" }
+    val imageRes = when (selectedGame) { HomeGame.DOUDIZHU -> R.drawable.wangyouge_game_doudizhu; HomeGame.GOMOKU -> R.drawable.wangyouge_game_gomoku; HomeGame.GAME_2048 -> R.drawable.wangyouge_game_more }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -407,7 +420,7 @@ private fun HomeGameHero(
                         }
                     }
                 }
-            } else {
+            } else if (isGomoku) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = onCreateGomoku,
@@ -432,6 +445,16 @@ private fun HomeGameHero(
                     ) {
                         Text("加入")
                     }
+                }
+            } else {
+                Button(
+                    onClick = onOpen2048,
+                    modifier = Modifier.height(50.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)
+                ) {
+                    Icon(Icons.Default.PlayArrow, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("开始游戏", fontWeight = FontWeight.Bold)
                 }
             }
         }
