@@ -119,6 +119,7 @@ fun Game2048Screen(
                     }
                 }
             }
+            }
             Column(
                 Modifier.width(230.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.Top
@@ -139,7 +140,6 @@ fun Game2048Screen(
                 OutlinedButton(onClick = { showRanks = true; onLeaderboard() }, modifier = Modifier.fillMaxWidth()) { Text("排行榜") }
             }
         }
-    }
     }
     if (showRanks) LeaderboardDialog(state, { showRanks = false })
 }
