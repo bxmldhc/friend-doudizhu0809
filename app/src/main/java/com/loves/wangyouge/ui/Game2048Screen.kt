@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,10 +69,15 @@ fun Game2048Screen(
             Spacer(Modifier.weight(1f))
             Text("单人游戏", color = Muted, fontSize = 12.sp)
         }
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.weight(1f).fillMaxHeight().aspectRatio(1f).padding(4.dp)
-                    .background(Board, RoundedCornerShape(14.dp))
+        Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            BoxWithConstraints(
+                Modifier.weight(1f).fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+                val boardSize = minOf(maxWidth, maxHeight)
+                Box(
+                    Modifier.size(boardSize).padding(4.dp)
+                        .background(Board, RoundedCornerShape(14.dp))
                     .pointerInput(Unit) {
                         var totalDragX = 0f
                         var totalDragY = 0f
@@ -90,8 +98,8 @@ fun Game2048Screen(
                             }
                         )
                     },
-                contentAlignment = Alignment.Center
-            ) {
+                    contentAlignment = Alignment.Center
+                ) {
                 androidx.compose.foundation.layout.Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     (0 until 4).forEach { column ->
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -111,7 +119,11 @@ fun Game2048Screen(
                     }
                 }
             }
-            Column(Modifier.width(230.dp).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
+            Column(
+                Modifier.width(230.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Top
+            ) {
+                Spacer(Modifier.height(8.dp))
                 ScoreBox("当前分数", state.state.score)
                 Spacer(Modifier.height(8.dp))
                 ScoreBox("最高分", state.bestScore)
@@ -127,6 +139,7 @@ fun Game2048Screen(
                 OutlinedButton(onClick = { showRanks = true; onLeaderboard() }, modifier = Modifier.fillMaxWidth()) { Text("排行榜") }
             }
         }
+    }
     }
     if (showRanks) LeaderboardDialog(state, { showRanks = false })
 }
