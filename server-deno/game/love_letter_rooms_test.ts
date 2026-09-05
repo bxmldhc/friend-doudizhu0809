@@ -40,3 +40,17 @@ Deno.test("情书房间支持四席、开局补 AI，并隐藏对手手牌", () 
     throw new Error("情书 STATE 泄露了对手手牌");
   }
 });
+
+Deno.test("情书创建房间按选择保留二至四个座位", () => {
+  for (const count of [2, 3, 4]) {
+    const manager = new RoomManager({ persistStats: false });
+    const host = new FakeSocket();
+    const code = manager.create(socket(host), "房主", "HARD", 0, "", false, 20, "LOVE_LETTER", count);
+    const created = latest(host, "ROOM");
+    if (created.gameType !== "LOVE_LETTER" || (created.players as string[]).length !== count) {
+      throw new Error(`情书没有按 ${count} 人创建等待区`);
+    }
+    if (created.requiredHumans !== count) throw new Error("情书人数配置未返回");
+    manager.disband(socket(host));
+  }
+});
