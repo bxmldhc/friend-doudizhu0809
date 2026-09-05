@@ -171,6 +171,12 @@ sealed interface GameUiState {
         val initialRoom: String = ""
     ) : GameUiState
 
+    data class LoveLetterEntry(
+        val nickname: String,
+        val serverUrl: String,
+        val playerCount: Int = 4
+    ) : GameUiState
+
     data class GomokuLobby(
         val roomCode: String,
         val yourSeat: Int,
@@ -500,8 +506,13 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
     fun openLoveLetter() {
         val session = authSession ?: return showAuth()
         if (!requirePasswordChanged(session)) return
-        config = GameConfig(humanCount = 4, difficulty = AiDifficulty.HARD, actionTimeoutSeconds = 20).normalized()
-        connect(session.nickname, lastServerUrl, host = true, room = null, gameType = RemoteGameType.LOVE_LETTER)
+        _uiState.value = GameUiState.LoveLetterEntry(session.nickname, lastServerUrl)
+    }
+
+    fun createLoveLetterRoom(playerCount: Int, serverUrl: String) {
+        val session = authSession ?: return showAuth()
+        config = GameConfig(humanCount = playerCount, difficulty = AiDifficulty.HARD, actionTimeoutSeconds = 20).normalized()
+        connect(session.nickname, serverUrl, host = true, room = null, gameType = RemoteGameType.LOVE_LETTER, playerCount = playerCount)
     }
 
     fun move2048(direction: Move2048) {
@@ -1584,7 +1595,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         host: Boolean,
         room: String?,
         resumeCredential: String? = null,
-        gameType: RemoteGameType = RemoteGameType.DOUDIZHU
+        gameType: RemoteGameType = RemoteGameType.DOUDIZHU,
+        playerCount: Int? = null
     ) {
         val session = authSession ?: return showAuth()
         if (!requirePasswordChanged(session)) return
@@ -1653,7 +1665,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     isHost = seat == hostSeat
                     playerNames = players
                     config = config.copy(
-                        humanCount = requiredHumans.coerceIn(1, 3),
+                        humanCount = if (roomGameType == RemoteGameType.LOVE_LETTER) requiredHumans.coerceIn(2, 4) else requiredHumans.coerceIn(1, 3),
                         difficulty = difficulty,
                         actionTimeoutSeconds = actionTimeoutSeconds
                     ).normalized()
@@ -1705,9 +1717,6 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                             requiredHumans = requiredHumans,
                             isHost = isHost
                         )
-                    }
-                    if (roomGameType == RemoteGameType.LOVE_LETTER && isHost) {
-                        nextClient?.startGame()
                     }
                 }
             },
@@ -1854,7 +1863,8 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                         config.difficulty,
                         config.aiCount,
                         config.actionTimeoutSeconds,
-                        gameType
+                        gameType,
+                        playerCount
                     )
                 } else {
                     nextClient.joinRoom(room, gameType)

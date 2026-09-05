@@ -28,6 +28,7 @@ export type ClientMessage =
     aiCount?: number;
     actionTimeoutSeconds?: number;
     gameType?: string;
+    playerCount?: number;
     game_mode?: string;
     playerId?: string;
     authToken?: string;

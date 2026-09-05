@@ -160,7 +160,8 @@ class OnlineClient(
         difficulty: AiDifficulty,
         aiCount: Int,
         actionTimeoutSeconds: Int,
-        gameType: RemoteGameType = RemoteGameType.DOUDIZHU
+        gameType: RemoteGameType = RemoteGameType.DOUDIZHU,
+        playerCount: Int? = null
     ) {
         webSocket?.send(
             GameProtocol.encodeCreate(
@@ -170,7 +171,8 @@ class OnlineClient(
                 difficulty,
                 aiCount,
                 actionTimeoutSeconds,
-                gameType
+                gameType,
+                playerCount
             )
         )
     }

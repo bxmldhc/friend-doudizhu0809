@@ -71,7 +71,8 @@ object GameProtocol {
         difficulty: AiDifficulty,
         aiCount: Int,
         actionTimeoutSeconds: Int,
-        gameType: RemoteGameType = RemoteGameType.DOUDIZHU
+        gameType: RemoteGameType = RemoteGameType.DOUDIZHU,
+        playerCount: Int? = null
     ): String {
         val obj = JSONObject()
         obj.put("type", "CREATE")
@@ -85,6 +86,7 @@ object GameProtocol {
             actionTimeoutSeconds.takeIf { it in setOf(15, 20, 30, 45) } ?: 20
         )
         obj.put("gameType", gameType.name)
+        if (playerCount != null) obj.put("playerCount", playerCount)
         return obj.toString()
     }
 

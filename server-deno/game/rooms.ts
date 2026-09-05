@@ -163,6 +163,7 @@ export class RoomManager {
     isAuthenticated = false,
     requestedActionTimeoutSeconds = DEFAULT_ACTION_TIMEOUT_SECONDS,
     requestedGameType: GameType = "DOUDIZHU",
+    requestedPlayerCount?: number,
   ): string {
     const gameType = requestedGameType === "LOVE_LETTER" ? "LOVE_LETTER" : requestedGameType;
     // 等候区始终为朋友保留所有座位，只有开局时才补足困难 AI。
@@ -179,7 +180,9 @@ export class RoomManager {
       isAuthenticated,
     );
     const participants = new Map<string, RoomParticipant>([[host.id, host]]);
-    const seatCount = gameType === "GOMOKU" ? 2 : gameType === "LOVE_LETTER" ? 4 : 3;
+    const seatCount = gameType === "GOMOKU" ? 2 : gameType === "LOVE_LETTER"
+      ? Math.min(4, Math.max(2, Math.trunc(requestedPlayerCount ?? 4)))
+      : 3;
     const playerIds: (string | null)[] = Array(seatCount).fill(null);
     playerIds[0] = host.id;
     const names = Array(seatCount).fill("等待加入");
@@ -196,7 +199,7 @@ export class RoomManager {
       startedAt: createdAt,
       lastActivityAt: createdAt,
       noOpenConnectionSince: null,
-      sockets: [ws, null, null],
+      sockets: Array(seatCount).fill(null),
       resumeTokens: [crypto.randomUUID(), null, null],
       playerIds,
       names,
@@ -840,6 +843,7 @@ export class RoomManager {
             msg.actionTimeoutSeconds ?? DEFAULT_ACTION_TIMEOUT_SECONDS,
           ),
           this.resolveGameType(msg),
+          Number(msg.playerCount ?? 0) || undefined,
         );
         this.bindSocketIdentity(
           ws,

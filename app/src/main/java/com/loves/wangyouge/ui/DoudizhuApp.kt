@@ -171,6 +171,11 @@ fun DoudizhuApp(
                     onCreate = viewModel::createGomokuRoom,
                     onJoin = viewModel::joinGomokuRoom
                 )
+                is GameUiState.LoveLetterEntry -> LoveLetterEntryScreen(
+                    state = state,
+                    onBack = viewModel::backHome,
+                    onCreate = viewModel::createLoveLetterRoom
+                )
                 is GameUiState.GomokuLobby -> GomokuLobbyScreen(
                     state = state,
                     onStart = viewModel::startHostGame,
