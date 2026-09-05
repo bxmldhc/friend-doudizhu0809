@@ -64,6 +64,7 @@ fun DoudizhuApp(
         is GameUiState.Home -> state.voiceEnabled
         is GameUiState.Playing -> state.voiceEnabled
         is GameUiState.GomokuPlaying -> state.voiceEnabled
+        is GameUiState.LoveLetterPlaying -> true
         else -> true
     }
     LaunchedEffect(voiceEnabled) {
@@ -100,6 +101,7 @@ fun DoudizhuApp(
                     onCreateGomoku = viewModel::openGomoku,
                     onJoinGomoku = { room -> viewModel.joinGomokuRoom(room, state.serverUrl) },
                     onOpen2048 = viewModel::open2048,
+                    onOpenLoveLetter = viewModel::openLoveLetter,
                     onHistory = viewModel::openHistory,
                     onFriends = viewModel::openFriends,
                     onResume = viewModel::resumeSavedRoom,
@@ -192,6 +194,16 @@ fun DoudizhuApp(
                     playerProfile = playerProfile,
                     onPlayerProfile = viewModel::openGomokuPlayerProfile,
                     onDismissPlayerProfile = viewModel::dismissPlayerProfile
+                )
+                is GameUiState.LoveLetterPlaying -> LoveLetterScreen(
+                    state = state,
+                    onPlay = viewModel::playLoveLetter,
+                    onExit = viewModel::exitToHome,
+                    onRetry = viewModel::retryConnection,
+                    onReady = viewModel::setReady,
+                    onRestart = viewModel::restart,
+                    onStart = viewModel::startHostGame,
+                    onInvite = { viewModel.openInviteFriends(RemoteGameType.LOVE_LETTER) }
                 )
                 is GameUiState.Game2048 -> Game2048Screen(
                     state = state,

@@ -121,6 +121,7 @@ fun HomeScreen(
     onCreateGomoku: () -> Unit,
     onJoinGomoku: (String) -> Unit,
     onOpen2048: () -> Unit,
+    onOpenLoveLetter: () -> Unit,
     onHistory: () -> Unit,
     onFriends: () -> Unit,
     onResume: () -> Unit,
@@ -288,6 +289,12 @@ fun HomeScreen(
                         HomeGameTile(
                             modifier = Modifier.width(if (compact) 112.dp else 138.dp),
                             imageRes = R.drawable.wangyouge_game_more,
+                            title = "情书",
+                            onClick = onOpenLoveLetter
+                        )
+                        HomeGameTile(
+                            modifier = Modifier.width(if (compact) 112.dp else 138.dp),
+                            imageRes = R.drawable.wangyouge_game_more,
                             title = "更多小游戏",
                             enabled = false,
                             onClick = {}
@@ -330,7 +337,8 @@ fun HomeScreen(
 private enum class HomeGame {
     DOUDIZHU,
     GOMOKU,
-    GAME_2048
+    GAME_2048,
+    LOVE_LETTER
 }
 
 @Composable
@@ -350,9 +358,9 @@ private fun HomeGameHero(
 ) {
     val isDoudizhu = selectedGame == HomeGame.DOUDIZHU
     val isGomoku = selectedGame == HomeGame.GOMOKU
-    val title = when (selectedGame) { HomeGame.DOUDIZHU -> "好友斗地主"; HomeGame.GOMOKU -> "五子棋"; HomeGame.GAME_2048 -> "2048" }
-    val detail = when (selectedGame) { HomeGame.DOUDIZHU -> "三人联机，支持 AI 补位"; HomeGame.GOMOKU -> "双人联机，黑方先行"; HomeGame.GAME_2048 -> "单人游戏，挑战最高分" }
-    val imageRes = when (selectedGame) { HomeGame.DOUDIZHU -> R.drawable.wangyouge_game_doudizhu; HomeGame.GOMOKU -> R.drawable.wangyouge_game_gomoku; HomeGame.GAME_2048 -> R.drawable.wangyouge_game_more }
+    val title = when (selectedGame) { HomeGame.DOUDIZHU -> "好友斗地主"; HomeGame.GOMOKU -> "五子棋"; HomeGame.GAME_2048 -> "2048"; HomeGame.LOVE_LETTER -> "情书" }
+    val detail = when (selectedGame) { HomeGame.DOUDIZHU -> "三人联机，支持 AI 补位"; HomeGame.GOMOKU -> "双人联机，黑方先行"; HomeGame.GAME_2048 -> "单人游戏，挑战最高分"; HomeGame.LOVE_LETTER -> "经典 16 张牌，支持 AI 补位" }
+    val imageRes = when (selectedGame) { HomeGame.DOUDIZHU -> R.drawable.wangyouge_game_doudizhu; HomeGame.GOMOKU -> R.drawable.wangyouge_game_gomoku; HomeGame.GAME_2048, HomeGame.LOVE_LETTER -> R.drawable.wangyouge_game_more }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),

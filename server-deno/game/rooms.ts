@@ -15,6 +15,7 @@ import { resolveSession } from "./auth.ts";
 import { Pattern } from "./hand.ts";
 import { GomokuEngine } from "./gomoku.ts";
 import { chooseGomokuAiMove } from "./gomoku_ai.ts";
+import { LoveLetterEngine, LoveLetterAction, serializeLoveLetterState } from "./love_letter.ts";
 import type { RoomInvitationEligibility } from "../api.ts";
 
 interface Room {
@@ -34,6 +35,7 @@ interface Room {
   readySeats: boolean[];
   engine: DoudizhuEngine | null;
   gomoku: GomokuEngine | null;
+  loveLetter: LoveLetterEngine | null;
   gameType: GameType;
   difficulty: Difficulty;
   aiCount: number;
@@ -107,6 +109,7 @@ interface RoomOperationResult {
 
 const AI_NAMES = ["小智", "阿强", "老K"];
 const GOMOKU_AI_NAME = "棋灵";
+const LOVE_LETTER_AI_NAME = "信使";
 const PLAYER_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/;
 export const DEFAULT_STALE_ROOM_GRACE_MS = 60_000;
 const DEFAULT_ACTION_TIMEOUT_SECONDS = 20;
@@ -161,7 +164,7 @@ export class RoomManager {
     requestedActionTimeoutSeconds = DEFAULT_ACTION_TIMEOUT_SECONDS,
     requestedGameType: GameType = "DOUDIZHU",
   ): string {
-    const gameType = requestedGameType;
+    const gameType = requestedGameType === "LOVE_LETTER" ? "LOVE_LETTER" : requestedGameType;
     // 等候区始终为朋友保留所有座位，只有开局时才补足困难 AI。
     const aiCount = 0;
     const difficulty: Difficulty = "HARD";
@@ -176,8 +179,11 @@ export class RoomManager {
       isAuthenticated,
     );
     const participants = new Map<string, RoomParticipant>([[host.id, host]]);
-    const playerIds: (string | null)[] = [host.id, null, null];
-    const names = [name, "等待加入", "等待加入"];
+    const seatCount = gameType === "GOMOKU" ? 2 : gameType === "LOVE_LETTER" ? 4 : 3;
+    const playerIds: (string | null)[] = Array(seatCount).fill(null);
+    playerIds[0] = host.id;
+    const names = Array(seatCount).fill("等待加入");
+    names[0] = name;
     const createdAt = Date.now();
     const actionTimeoutSeconds = gameType === "GOMOKU"
       ? DEFAULT_ACTION_TIMEOUT_SECONDS
@@ -198,15 +204,16 @@ export class RoomManager {
       participants,
       roundHistory: [],
       lastRecordedGameNumber: 0,
-      readySeats: [true, true, true],
+      readySeats: Array(seatCount).fill(true),
       engine: null,
       gomoku: null,
+      loveLetter: null,
       gameType,
       difficulty,
       aiCount,
       actionTimeoutMs: actionTimeoutSeconds * 1_000,
-      quickMessageAt: [0, 0, 0],
-      throwItemAt: [0, 0, 0],
+      quickMessageAt: Array(seatCount).fill(0),
+      throwItemAt: Array(seatCount).fill(0),
       aiRunning: false,
       actionDeadlineAt: null,
       turnTimer: null,
@@ -233,7 +240,7 @@ export class RoomManager {
         message: "房间不存在或已结束",
       };
     }
-    if (room.engine || room.gomoku) {
+    if (room.engine || room.gomoku || room.loveLetter) {
       return {
         ok: false,
         code: "GAME_ALREADY_STARTED",
@@ -329,7 +336,7 @@ export class RoomManager {
     if (room.engine) {
       this.syncSeatIdentity(room);
       this.publishState(room);
-    } else if (room.gomoku) {
+    } else if (room.gomoku || room.loveLetter) {
       this.broadcastState(room);
     }
     return { ok: true };
@@ -397,7 +404,7 @@ export class RoomManager {
       } else {
         this.broadcastState(room);
       }
-    } else if (room.gomoku) {
+    } else if (room.gomoku || room.loveLetter) {
       this.broadcastState(room);
     } else {
       this.broadcastPlayers(room);
@@ -416,8 +423,16 @@ export class RoomManager {
       return;
     }
     if (!this.validateStartPlayers(room, ws)) return;
-    if (!room.engine && !room.gomoku) {
+    if (!room.engine && !room.gomoku && !room.loveLetter) {
       this.fillMissingSeatsWithAi(room);
+    }
+    if (room.gameType === "LOVE_LETTER") {
+      room.loveLetter = new LoveLetterEngine(this.seatCount(room));
+      room.loveLetter.startNewGame();
+      this.touchRoom(room);
+      this.markEvent(room, "ROUND_STARTED", null, false);
+      this.publishState(room);
+      return;
     }
     if (room.gameType === "GOMOKU") {
       if (!room.gomoku) room.gomoku = new GomokuEngine();
@@ -442,7 +457,7 @@ export class RoomManager {
 
   restart(ws: WebSocket) {
     const room = this.getRoomBySocket(ws);
-    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
+    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : room.gameType === "LOVE_LETTER" ? !room.loveLetter : !room.engine)) {
       sendError(ws, "INVALID_ACTION", "当前房间没有可重开的牌局");
       return;
     }
@@ -469,6 +484,8 @@ export class RoomManager {
     }
     if (room.gameType === "GOMOKU") {
       room.gomoku!.startNewGame();
+    } else if (room.gameType === "LOVE_LETTER") {
+      room.loveLetter!.startNewGame();
     } else {
       room.engine!.startNewGame();
     }
@@ -481,7 +498,7 @@ export class RoomManager {
 
   setReady(ws: WebSocket, ready: boolean) {
     const room = this.getRoomBySocket(ws);
-    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
+    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : room.gameType === "LOVE_LETTER" ? !room.loveLetter : !room.engine)) {
       sendError(ws, "INVALID_ACTION", "当前房间没有可准备的牌局");
       return;
     }
@@ -613,7 +630,7 @@ export class RoomManager {
 
   action(ws: WebSocket, seat: number, action: RemoteAction) {
     const room = this.getRoomBySocket(ws);
-    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : !room.engine)) {
+    if (!room || (room.gameType === "GOMOKU" ? !room.gomoku : room.gameType === "LOVE_LETTER" ? !room.loveLetter : !room.engine)) {
       sendError(ws, "INVALID_ACTION", "当前房间没有进行中的牌局");
       return;
     }
@@ -623,6 +640,8 @@ export class RoomManager {
     }
     const turnIndex = room.gameType === "GOMOKU"
       ? room.gomoku!.state.turnIndex
+      : room.gameType === "LOVE_LETTER"
+      ? room.loveLetter!.state.turnIndex
       : room.engine!.state.turnIndex;
     if (turnIndex !== seat) {
       sendError(ws, "INVALID_ACTION", "当前还没有轮到你操作");
@@ -634,6 +653,22 @@ export class RoomManager {
         return;
       }
       this.applyGomokuMove(room, seat, action.row, action.col);
+      return;
+    }
+    if (room.gameType === "LOVE_LETTER") {
+      if (action.kind !== "LOVE_LETTER_PLAY") {
+        sendError(ws, "INVALID_ACTION", "情书操作无效");
+        return;
+      }
+      try {
+        room.loveLetter!.play(seat, action as LoveLetterAction);
+        this.touchRoom(room);
+        this.markEvent(room, "LOVE_LETTER_PLAY", seat, false);
+        if (room.loveLetter?.state.phase === "FINISHED") this.recordFinishedLoveLetterRound(room);
+        this.publishState(room);
+      } catch (err) {
+        sendError(ws, "INVALID_ACTION", err instanceof Error ? err.message : String(err));
+      }
       return;
     }
     this.applyAction(room, seat, action);
@@ -769,7 +804,7 @@ export class RoomManager {
       ) {
         this.broadcastPlayers(room);
       }
-      if (room.engine || room.gomoku) this.publishState(room);
+      if (room.engine || room.gomoku || room.loveLetter) this.publishState(room);
     }
   }
 
@@ -966,9 +1001,9 @@ export class RoomManager {
     const value = String(message.gameType ?? message.game_mode ?? "")
       .trim()
       .toUpperCase();
-    return value === "GOMOKU" || value === "WUZIQI" || value === "FIVE_IN_A_ROW"
-      ? "GOMOKU"
-      : "DOUDIZHU";
+    if (value === "GOMOKU" || value === "WUZIQI" || value === "FIVE_IN_A_ROW") return "GOMOKU";
+    if (value === "LOVE_LETTER" || value === "LOVELETTER" || value === "情书") return "LOVE_LETTER";
+    return "DOUDIZHU";
   }
 
   private async resolveAuthenticatedMessageIdentity(
@@ -1047,7 +1082,9 @@ export class RoomManager {
       aiCount: room.aiCount,
       requiredHumans: this.requiredHumans(room),
       gameType: room.gameType,
-      game_mode: room.gameType === "GOMOKU" ? "gomoku" : "doudizhu",
+      game_mode: room.gameType === "GOMOKU"
+        ? "gomoku"
+        : room.gameType === "LOVE_LETTER" ? "love-letter" : "doudizhu",
       difficulty: room.difficulty,
       actionTimeoutSeconds: room.actionTimeoutMs / 1_000,
     });
@@ -1060,6 +1097,24 @@ export class RoomManager {
   }
 
   private broadcastState(room: Room) {
+    if (room.loveLetter) {
+      const seatCount = this.seatCount(room);
+      room.sockets.slice(0, seatCount).forEach((ws, seat) => {
+        if (ws) send(ws, {
+          type: "STATE",
+          state: {
+            ...serializeLoveLetterState(room.loveLetter!.state, seat, room, room.actionDeadlineAt),
+            actionDeadlineAt: room.actionDeadlineAt,
+            leaderboard: this.buildLeaderboard(room),
+            roundHistory: room.roundHistory,
+            readySeats: room.readySeats,
+            revision: room.revision,
+            lastEvent: room.lastEvent,
+          },
+        });
+      });
+      return;
+    }
     if (room.gomoku) {
       const seatCount = this.seatCount(room);
       const connectedSeats = room.sockets
@@ -1189,6 +1244,19 @@ export class RoomManager {
 
   private publishState(room: Room) {
     this.cancelTurnTimer(room);
+    if (room.loveLetter) {
+      if (room.loveLetter.state.phase !== "FINISHED") {
+        const version = room.turnVersion;
+        const timeoutMs = this.options.actionTimeoutMs ?? room.actionTimeoutMs;
+        room.actionDeadlineAt = Date.now() + timeoutMs;
+        const timer = setTimeout(() => this.handleLoveLetterTurnTimeout(room, version), timeoutMs);
+        room.turnTimer = timer;
+        Deno.unrefTimer(timer);
+      }
+      this.broadcastState(room);
+      this.scheduleLoveLetterAi(room);
+      return;
+    }
     if (room.gomoku) {
       if (room.gomoku.state.phase !== "FINISHED") {
         const version = room.turnVersion;
@@ -1234,6 +1302,112 @@ export class RoomManager {
     const move = chooseGomokuAiMove(room.gomoku.state, seat);
     if (move) {
       this.applyGomokuMove(room, seat, move.row, move.col, true);
+    }
+  }
+
+  private handleLoveLetterTurnTimeout(room: Room, version: number) {
+    if (
+      room.turnVersion !== version ||
+      !room.loveLetter ||
+      room.loveLetter.state.phase !== "PLAYING"
+    ) return;
+    const seat = room.loveLetter.state.turnIndex;
+    const playerId = room.playerIds[seat];
+    if (playerId && room.participants.get(playerId)?.isAi === true) return;
+    const action = this.chooseLoveLetterAiAction(room);
+    if (!action) return;
+    try {
+      room.loveLetter.play(seat, action);
+      this.touchRoom(room);
+      this.markEvent(room, "LOVE_LETTER_PLAY", seat, true);
+      this.publishState(room);
+    } catch (error) {
+      console.error("情书超时操作失败", error);
+    }
+  }
+
+  private scheduleLoveLetterAi(room: Room) {
+    const engine = room.loveLetter;
+    if (!engine || engine.state.phase !== "PLAYING" || room.aiRunning) return;
+    const seat = engine.state.turnIndex;
+    const playerId = room.playerIds[seat];
+    if (!playerId || room.participants.get(playerId)?.isAi !== true) return;
+    room.aiRunning = true;
+    const timer = setTimeout(() => {
+      try {
+        if (room.loveLetter?.state.phase !== "PLAYING" || room.loveLetter.state.turnIndex !== seat) return;
+        const action = this.chooseLoveLetterAiAction(room);
+        if (!action) return;
+        room.loveLetter.play(seat, action);
+        this.touchRoom(room);
+        this.markEvent(room, "LOVE_LETTER_PLAY", seat, true);
+        if (room.loveLetter) this.recordFinishedLoveLetterRound(room);
+        this.publishState(room);
+      } catch (error) {
+        console.error("情书 AI 出牌失败", error);
+      } finally {
+        room.aiRunning = false;
+      }
+    }, this.options.aiDelayMs ?? 700);
+    Deno.unrefTimer(timer);
+  }
+
+  private chooseLoveLetterAiAction(room: Room): LoveLetterAction | null {
+    const engine = room.loveLetter;
+    if (!engine) return null;
+    const seat = engine.state.turnIndex;
+    const player = engine.state.players[seat];
+    if (!player?.hand.length) return null;
+    const forced = player.hand.find((card) => card.name === "COUNTESS" && player.hand.some((item) => item.name === "KING" || item.name === "PRINCE"));
+    const card = forced ?? [...player.hand].sort((left, right) => right.value - left.value)[0];
+    const target = engine.state.players.find((candidate) => candidate.seat !== seat && candidate.alive && !candidate.protected);
+    const action: LoveLetterAction = { cardId: card.id };
+    if (["GUARD", "PRIEST", "BARON", "KING"].includes(card.name) && target) action.targetSeat = target.seat;
+    if (card.name === "GUARD") action.guessValue = 2;
+    return action;
+  }
+
+  private recordFinishedLoveLetterRound(room: Room) {
+    const state = room.loveLetter?.state;
+    if (!state || room.lastRecordedGameNumber === state.gameNumber) return;
+    room.lastRecordedGameNumber = state.gameNumber;
+    const winner = state.winnerIndex;
+    const scores = room.playerIds.slice(0, this.seatCount(room)).flatMap((playerId, seat) => {
+      if (!playerId) return [];
+      const participant = room.participants.get(playerId);
+      if (!participant) return [];
+      const delta = winner === seat ? 1 : 0;
+      participant.score += delta;
+      return [{ playerId, name: participant.name, delta, totalScore: participant.score, isAi: participant.isAi }];
+    });
+    room.roundHistory.push({
+      gameNumber: state.gameNumber,
+      winnerPlayerId: winner === null ? null : room.playerIds[winner],
+      landlordPlayerId: null,
+      multiplier: 1,
+      scores,
+    });
+    this.resetReadySeats(room);
+    if (this.options.persistStats !== false) {
+      void recordGame(scores.map((score) => ({
+        playerId: score.playerId,
+        name: score.name,
+        delta: score.delta,
+        isAi: score.isAi || !room.participants.get(score.playerId)?.isAuthenticated,
+      })), {
+        matchId: room.matchId,
+        roomCode: room.code,
+        startedAt: room.startedAt,
+        gameType: "LOVE_LETTER",
+        round: {
+          gameNumber: state.gameNumber,
+          finishedAt: Date.now(),
+          winnerPlayerId: winner === null ? null : room.playerIds[winner],
+          landlordPlayerId: null,
+          multiplier: 1,
+          players: scores.map((score) => ({ playerId: score.playerId, name: score.name, delta: score.delta, isAi: score.isAi })),
+        },
+      }).catch((error) => console.error("记录情书战绩失败", error));
     }
   }
 
@@ -1382,6 +1556,7 @@ export class RoomManager {
     if (action.kind === "PLAY") return "PLAY";
     if (action.kind === "PASS") return "PASS";
     if (action.kind === "MOVE") return "GOMOKU_MOVE";
+    if (action.kind !== "CALL") return "PLAY";
     if (!action.want) {
       return state.bidCandidateIndex === null ? "NOT_CALL" : "NOT_ROB";
     }
@@ -1700,8 +1875,7 @@ export class RoomManager {
   }
 
   private resetReadySeats(room: Room) {
-    room.readySeats = [0, 1, 2].map((seat) => {
-      if (seat >= this.seatCount(room)) return true;
+    room.readySeats = Array.from({ length: this.seatCount(room) }, (_, seat) => {
       const participant = room.playerIds[seat]
         ? room.participants.get(room.playerIds[seat]!)
         : null;
@@ -1722,26 +1896,28 @@ export class RoomManager {
   }
 
   private seatCountForGame(gameType: GameType): number {
-    return gameType === "GOMOKU" ? 2 : 3;
+    if (gameType === "GOMOKU") return 2;
+    if (gameType === "LOVE_LETTER") return 4;
+    return 3;
   }
 
   private isRoundInProgress(room: Room): boolean {
-    return room.gameType === "GOMOKU"
-      ? room.gomoku !== null && room.gomoku.state.phase === "PLAYING"
-      : room.engine !== null && room.engine.state.phase !== "FINISHED";
+    if (room.gameType === "GOMOKU") return room.gomoku !== null && room.gomoku.state.phase === "PLAYING";
+    if (room.gameType === "LOVE_LETTER") return room.loveLetter !== null && room.loveLetter.state.phase === "PLAYING";
+    return room.engine !== null && room.engine.state.phase !== "FINISHED";
   }
 
   private isRoundFinished(room: Room): boolean {
-    return room.gameType === "GOMOKU"
-      ? room.gomoku?.state.phase === "FINISHED"
-      : room.engine?.state.phase === "FINISHED";
+    if (room.gameType === "GOMOKU") return room.gomoku?.state.phase === "FINISHED";
+    if (room.gameType === "LOVE_LETTER") return room.loveLetter?.state.phase === "FINISHED";
+    return room.engine?.state.phase === "FINISHED";
   }
 
   private gameNumber(room: Room): number {
-    return room.gomoku?.state.gameNumber ?? room.engine?.state.gameNumber ?? 0;
+    return room.loveLetter?.state.gameNumber ?? room.gomoku?.state.gameNumber ?? room.engine?.state.gameNumber ?? 0;
   }
 
   private phase(room: Room): AdminRoomSnapshot["phase"] {
-    return room.gomoku?.state.phase ?? room.engine?.state.phase ?? "WAITING";
+    return room.loveLetter?.state.phase ?? room.gomoku?.state.phase ?? room.engine?.state.phase ?? "WAITING";
   }
 }

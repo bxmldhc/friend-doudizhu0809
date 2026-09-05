@@ -9,14 +9,16 @@ import {
 import { Difficulty } from "./engine.ts";
 import { ComboType } from "./hand.ts";
 import { GomokuState } from "./gomoku.ts";
+import { LoveLetterState, serializeLoveLetterState } from "./love_letter.ts";
 
-export type GameType = "DOUDIZHU" | "GOMOKU";
+export type GameType = "DOUDIZHU" | "GOMOKU" | "LOVE_LETTER";
 
 export type RemoteAction =
   | { kind: "CALL"; want: boolean }
   | { kind: "PLAY"; cards: string[] }
   | { kind: "PASS" }
-  | { kind: "MOVE"; row: number; col: number };
+  | { kind: "MOVE"; row: number; col: number }
+  | { kind: "LOVE_LETTER_PLAY"; cardId: string; targetSeat?: number; guessValue?: number };
 
 export type ClientMessage =
   | {
@@ -53,6 +55,7 @@ export type ClientMessage =
   | { type: "LEAVE" }
   | { type: "ACTION"; seat: number; action: RemoteAction }
   | { type: "GOMOKU_MOVE"; row: number; col: number }
+  | { type: "LOVE_LETTER_PLAY"; cardId: string; targetSeat?: number; guessValue?: number }
   | { type: "PING" };
 
 export interface RoomLeaderboardEntry {
@@ -292,6 +295,23 @@ export function serializeGomokuState(
     leaderboard: roomContext?.leaderboard ?? [],
     roundHistory: roomContext?.roundHistory ?? [],
     readySeats: (roomContext?.readySeats ?? [false, false]).slice(0, 2),
+    revision: roomContext?.revision ?? 0,
+    lastEvent: roomContext?.lastEvent ?? null,
+  };
+}
+
+export function serializeLoveLetterRoomState(
+  state: LoveLetterState,
+  viewerSeat: number,
+  roomContext: RoomStateContext | null = null,
+  actionDeadlineAt: number | null = null,
+): Record<string, unknown> {
+  return {
+    ...serializeLoveLetterState(state, viewerSeat, roomContext, actionDeadlineAt),
+    actionDeadlineAt,
+    leaderboard: roomContext?.leaderboard ?? [],
+    roundHistory: roomContext?.roundHistory ?? [],
+    readySeats: roomContext?.readySeats ?? [],
     revision: roomContext?.revision ?? 0,
     lastEvent: roomContext?.lastEvent ?? null,
   };

@@ -189,6 +189,15 @@ sealed interface GameUiState {
         val connection: AppConnectionState = AppConnectionState.ONLINE
     ) : GameUiState
 
+    data class LoveLetterPlaying(
+        val state: com.loves.wangyouge.model.LoveLetterState,
+        val mySeat: Int,
+        val roomCode: String,
+        val players: List<String>,
+        val isHost: Boolean,
+        val connection: AppConnectionState = AppConnectionState.ONLINE
+    ) : GameUiState
+
     data class History(
         val stats: AccountStats? = null,
         val loading: Boolean = true,
@@ -486,6 +495,13 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             leaderboardLoading = true
         )
         load2048Leaderboard()
+    }
+
+    fun openLoveLetter() {
+        val session = authSession ?: return showAuth()
+        if (!requirePasswordChanged(session)) return
+        config = GameConfig(humanCount = 4, difficulty = AiDifficulty.HARD, actionTimeoutSeconds = 20).normalized()
+        connect(session.nickname, lastServerUrl, host = true, room = null, gameType = RemoteGameType.LOVE_LETTER)
     }
 
     fun move2048(direction: Move2048) {
@@ -1368,6 +1384,12 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         onlineClient?.sendGomokuMove(row, col)
     }
 
+    fun playLoveLetter(cardId: String, targetSeat: Int? = null, guessValue: Int? = null) {
+        val current = _uiState.value as? GameUiState.LoveLetterPlaying ?: return
+        if (current.connection != AppConnectionState.ONLINE || current.state.turnIndex != current.mySeat) return
+        onlineClient?.sendLoveLetterPlay(cardId, targetSeat, guessValue, current.mySeat)
+    }
+
     fun startHostGame() {
         onlineClient?.startGame()
     }
@@ -1397,6 +1419,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         val connection = when (current) {
             is GameUiState.Playing -> current.connection
             is GameUiState.GomokuPlaying -> current.connection
+            is GameUiState.LoveLetterPlaying -> current.connection
             else -> return
         }
         if (connection != AppConnectionState.ONLINE) {
@@ -1406,6 +1429,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
         val mySeat = when (current) {
             is GameUiState.Playing -> current.mySeat
             is GameUiState.GomokuPlaying -> current.mySeat
+            is GameUiState.LoveLetterPlaying -> current.mySeat
             else -> return
         }
         if (targetSeat == mySeat) return
@@ -1423,6 +1447,7 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
             current is GameUiState.Playing ||
             current is GameUiState.GomokuLobby ||
             current is GameUiState.GomokuPlaying
+                || current is GameUiState.LoveLetterPlaying
         ) {
             val savedToken = resumeToken ?: loadResumeToken(roomCode, lastServerUrl)
             val reconnectRoom = if (!savedToken.isNullOrBlank() && roomCode.isNotBlank()) roomCode else null
@@ -1635,7 +1660,15 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                     connection = AppConnectionState.ONLINE
                     reconnectAttempt = 0
                     val current = _uiState.value
-                    _uiState.value = if (roomGameType == RemoteGameType.GOMOKU) {
+                    _uiState.value = if (roomGameType == RemoteGameType.LOVE_LETTER) {
+                        if (current is GameUiState.LoveLetterPlaying) current.copy(
+                            mySeat = seat, roomCode = code, players = players,
+                            isHost = isHost, connection = connection
+                        ) else GameUiState.LoveLetterPlaying(
+                            state = com.loves.wangyouge.model.LoveLetterState("WAITING", emptyList(), 0, 0, 0, "", null),
+                            mySeat = seat, roomCode = code, players = players, isHost = isHost
+                        )
+                    } else if (roomGameType == RemoteGameType.GOMOKU) {
                         when (current) {
                             is GameUiState.GomokuPlaying -> current.copy(
                                 mySeat = seat,
@@ -1673,6 +1706,9 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                             isHost = isHost
                         )
                     }
+                    if (roomGameType == RemoteGameType.LOVE_LETTER && isHost) {
+                        nextClient?.startGame()
+                    }
                 }
             },
             onState = { state ->
@@ -1707,6 +1743,20 @@ class DoudizhuViewModel(application: Application) : AndroidViewModel(application
                         players = playerNames,
                         isHost = isHost,
                         voiceEnabled = voiceEnabled,
+                        connection = connection
+                    )
+                }
+            },
+            onLoveLetterState = { state ->
+                if (onlineClient === nextClient && activeGameType == RemoteGameType.LOVE_LETTER) {
+                    connection = AppConnectionState.ONLINE
+                    reconnectAttempt = 0
+                    _uiState.value = GameUiState.LoveLetterPlaying(
+                        state = state,
+                        mySeat = mySeat,
+                        roomCode = roomCode,
+                        players = playerNames,
+                        isHost = isHost,
                         connection = connection
                     )
                 }

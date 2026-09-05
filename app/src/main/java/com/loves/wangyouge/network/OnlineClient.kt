@@ -3,6 +3,7 @@ package com.loves.wangyouge.network
 import com.loves.wangyouge.logic.EngineState
 import com.loves.wangyouge.model.AiDifficulty
 import com.loves.wangyouge.model.GomokuState
+import com.loves.wangyouge.model.LoveLetterState
 import com.loves.wangyouge.model.RemoteGameType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -39,6 +40,7 @@ class OnlineClient(
     ) -> Unit,
     private val onState: (EngineState) -> Unit,
     private val onGomokuState: (GomokuState) -> Unit,
+    private val onLoveLetterState: (LoveLetterState) -> Unit,
     private val onRoomDisbanded: (String) -> Unit,
     private val onQuickMessage: (seat: Int, messageId: String, at: Long) -> Unit,
     private val onItemThrown: (fromSeat: Int, targetSeat: Int, item: String, at: Long) -> Unit,
@@ -90,6 +92,7 @@ class OnlineClient(
                             )
                             is NetMessage.State -> onState(msg.state)
                             is NetMessage.GomokuState -> onGomokuState(msg.state)
+                            is NetMessage.LoveLetterState -> onLoveLetterState(msg.state)
                             is NetMessage.RoomDisbanded -> onRoomDisbanded(msg.reason)
                             is NetMessage.QuickMessage -> onQuickMessage(
                                 msg.seat,
@@ -214,6 +217,10 @@ class OnlineClient(
 
     fun sendGomokuMove(row: Int, col: Int) {
         webSocket?.send(GameProtocol.encodeGomokuMove(row, col))
+    }
+
+    fun sendLoveLetterPlay(cardId: String, targetSeat: Int? = null, guessValue: Int? = null, seat: Int = 0) {
+        webSocket?.send(GameProtocol.encodeLoveLetterPlay(seat, cardId, targetSeat, guessValue))
     }
 
     fun close() {

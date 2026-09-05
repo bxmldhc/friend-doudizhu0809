@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
@@ -105,6 +106,7 @@ fun GameScreen(
     var selected by remember(game.gameNumber, game.turnIndex, game.phase) { mutableStateOf(emptySet<Card>()) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var showScoreboard by remember { mutableStateOf(false) }
+    var showRules by remember { mutableStateOf(false) }
     var showRoundScore by remember(game.gameNumber, game.phase) {
         mutableStateOf(game.phase == Phase.FINISHED)
     }
@@ -144,6 +146,7 @@ fun GameScreen(
                 game = game,
                 onRetry = onRetry,
                 onScoreboard = { showScoreboard = !showScoreboard },
+                onRules = { showRules = true },
                 onQuickMessages = { showQuickMessages = !showQuickMessages },
                 canDisband = state.isHost && game.phase == Phase.FINISHED,
                 onDisband = { showDisbandConfirm = true },
@@ -235,6 +238,9 @@ fun GameScreen(
                 },
                 onDismiss = { showScoreboard = false }
             )
+        }
+        if (showRules) {
+            GameRulesDialog(game = RuleGame.DOUDIZHU, onDismiss = { showRules = false })
         }
         if (showQuickMessages) {
             QuickMessageMenu(
@@ -337,6 +343,7 @@ private fun GameTopBar(
     game: EngineState,
     onRetry: () -> Unit,
     onScoreboard: () -> Unit,
+    onRules: () -> Unit,
     onQuickMessages: () -> Unit,
     canDisband: Boolean,
     onDisband: () -> Unit,
@@ -407,6 +414,12 @@ private fun GameTopBar(
                 modifier = Modifier.size(if (compact) 40.dp else 44.dp)
             ) {
                 Icon(Icons.Default.Leaderboard, "查看场内排行榜", tint = Color.White)
+            }
+            IconButton(
+                onClick = onRules,
+                modifier = Modifier.size(if (compact) 40.dp else 44.dp)
+            ) {
+                Icon(Icons.Default.Info, "查看斗地主规则", tint = Color.White)
             }
             if (canDisband && !compact) {
                 IconButton(onClick = onDisband, modifier = Modifier.size(44.dp)) {

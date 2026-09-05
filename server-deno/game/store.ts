@@ -53,7 +53,7 @@ export interface RecentMatch {
   roomCode: string;
   startedAt: number;
   updatedAt: number;
-  gameType?: "DOUDIZHU" | "GOMOKU";
+  gameType?: "DOUDIZHU" | "GOMOKU" | "LOVE_LETTER";
   rounds: MatchRoundRecord[];
 }
 
@@ -62,7 +62,7 @@ export interface MatchContext {
   roomCode: string;
   startedAt: number;
   round: MatchRoundRecord;
-  gameType?: "DOUDIZHU" | "GOMOKU";
+  gameType?: "DOUDIZHU" | "GOMOKU" | "LOVE_LETTER";
 }
 
 export interface AdminAuditRecord {

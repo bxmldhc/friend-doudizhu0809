@@ -58,6 +58,7 @@ private enum class HistoryGame(val wire: String, val label: String) {
     DOUDIZHU("DOUDIZHU", "斗地主"),
     GOMOKU("GOMOKU", "五子棋"),
     GAME_2048("2048", "2048")
+    ,LOVE_LETTER("LOVE_LETTER", "情书")
 }
 
 @Composable
@@ -150,7 +151,7 @@ private fun HistoryGameCard(
                 fontSize = 12.sp
             )
             Text(
-                if (game == HistoryGame.GOMOKU) "${games} 场对局" else "${games} 小局",
+                if (game == HistoryGame.GOMOKU || game == HistoryGame.LOVE_LETTER) "${games} 场对局" else "${games} 小局",
                 color = if (selected) Color.White else Muted,
                 fontSize = 12.sp
             )
@@ -184,7 +185,7 @@ private fun StatsPanel(
                 stats != null -> {
                     val selected = selectedStats(stats, game)
                     StatItem("场分", selected.totalScore.toString())
-                    StatItem(if (game == HistoryGame.GOMOKU) "完成对局" else "完成小局", selected.games.toString())
+                    StatItem(if (game == HistoryGame.GOMOKU || game == HistoryGame.LOVE_LETTER) "完成对局" else "完成小局", selected.games.toString())
                     StatItem("胜局", selected.wins.toString())
                     StatItem("胜率", "${rate(selected.wins, selected.games)}%")
                     if (game == HistoryGame.DOUDIZHU) {

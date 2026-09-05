@@ -38,7 +38,7 @@ interface StoredRoomInvitation {
   status: "PENDING" | "ACCEPTED" | "DISMISSED";
 }
 
-export type RoomInvitationGameType = "DOUDIZHU" | "GOMOKU";
+export type RoomInvitationGameType = "DOUDIZHU" | "GOMOKU" | "LOVE_LETTER";
 
 export interface OnlineAccountSnapshot {
   accountId: string;
@@ -396,7 +396,7 @@ export async function createRoomInvitation(
   if (!/^\d{6}$/.test(normalizedRoomCode)) {
     throw new AuthError("房间号格式不正确", "INVALID_ROOM_CODE");
   }
-  if (gameType !== "DOUDIZHU" && gameType !== "GOMOKU") {
+  if (gameType !== "DOUDIZHU" && gameType !== "GOMOKU" && gameType !== "LOVE_LETTER") {
     throw new AuthError("不支持的游戏类型", "INVALID_GAME_TYPE");
   }
 

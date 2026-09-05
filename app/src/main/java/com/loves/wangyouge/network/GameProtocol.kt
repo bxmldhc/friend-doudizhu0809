@@ -7,6 +7,10 @@ import com.loves.wangyouge.model.GomokuPhase
 import com.loves.wangyouge.model.GomokuPoint
 import com.loves.wangyouge.model.GomokuSeat
 import com.loves.wangyouge.model.GomokuState
+import com.loves.wangyouge.model.LoveLetterCard
+import com.loves.wangyouge.model.LoveLetterPlayer
+import com.loves.wangyouge.model.LoveLetterState
+import com.loves.wangyouge.model.LoveLetterActionResult
 import com.loves.wangyouge.model.RemoteGameType
 import org.json.JSONObject
 
@@ -36,6 +40,7 @@ sealed interface NetMessage {
     ) : NetMessage
     data class State(val state: EngineState) : NetMessage
     data class GomokuState(val state: com.loves.wangyouge.model.GomokuState) : NetMessage
+    data class LoveLetterState(val state: com.loves.wangyouge.model.LoveLetterState) : NetMessage
     data class RoomDisbanded(val reason: String) : NetMessage
     data class QuickMessage(
         val seat: Int,
@@ -165,6 +170,14 @@ object GameProtocol {
         .put("col", col)
         .toString()
 
+    fun encodeLoveLetterPlay(seat: Int, cardId: String, targetSeat: Int? = null, guessValue: Int? = null): String {
+        val obj = JSONObject().put("type", "ACTION").put("seat", seat)
+        val action = JSONObject().put("kind", "LOVE_LETTER_PLAY").put("cardId", cardId)
+        if (targetSeat != null) action.put("targetSeat", targetSeat)
+        if (guessValue != null) action.put("guessValue", guessValue)
+        return obj.put("action", action).toString()
+    }
+
     fun parseMessage(raw: String): NetMessage {
         val obj = JSONObject(raw)
         return when (obj.getString("type")) {
@@ -190,6 +203,8 @@ object GameProtocol {
                 val state = obj.getJSONObject("state")
                 if (RemoteGameType.fromWire(state.optString("gameType")) == RemoteGameType.GOMOKU) {
                     NetMessage.GomokuState(decodeGomokuState(state))
+                } else if (RemoteGameType.fromWire(state.optString("gameType")) == RemoteGameType.LOVE_LETTER) {
+                    NetMessage.LoveLetterState(decodeLoveLetterState(state))
                 } else {
                     NetMessage.State(GameCodec.decodeState(state.toString()))
                 }
@@ -267,6 +282,38 @@ object GameProtocol {
             actionDeadlineAt = if (
                 obj.has("actionDeadlineAt") && !obj.isNull("actionDeadlineAt")
             ) obj.optLong("actionDeadlineAt") else null
+        )
+    }
+
+    private fun decodeLoveLetterState(obj: JSONObject): LoveLetterState {
+        val playersJson = obj.optJSONArray("players")
+        val players = if (playersJson == null) emptyList() else List(playersJson.length()) { index ->
+            val item = playersJson.getJSONObject(index)
+            val handJson = item.optJSONArray("hand")
+            val hand = if (handJson == null) emptyList() else (0 until handJson.length()).mapNotNull { i ->
+                val card = handJson.optJSONObject(i) ?: return@mapNotNull null
+                if (card.optBoolean("hidden", false)) null else LoveLetterCard(
+                    card.optString("id"), card.optInt("value"), card.optString("name")
+                )
+            }
+            LoveLetterPlayer(index, item.optBoolean("alive", true), item.optBoolean("protected", false), hand, item.optInt("handCount", hand.size), item.optInt("tokens", 0))
+        }
+        return LoveLetterState(
+            phase = obj.optString("phase", "WAITING"), players = players,
+            deckCount = obj.optInt("deckCount", 0), turnIndex = obj.optInt("turnIndex", 0),
+            gameNumber = obj.optInt("gameNumber", 0), message = obj.optString("message"),
+            winnerIndex = if (obj.isNull("winnerIndex")) null else obj.optInt("winnerIndex"),
+            actionDeadlineAt = if (obj.has("actionDeadlineAt") && !obj.isNull("actionDeadlineAt")) obj.optLong("actionDeadlineAt") else null,
+            readySeats = obj.optJSONArray("readySeats")?.let { array -> List(array.length()) { array.optBoolean(it) } }.orEmpty(),
+            lastAction = obj.optJSONObject("lastAction")?.let { action ->
+                LoveLetterActionResult(
+                    seat = action.optInt("seat"),
+                    card = action.optString("card"),
+                    targetSeat = if (action.isNull("targetSeat")) null else action.optInt("targetSeat"),
+                    guessValue = if (action.isNull("guessValue")) null else action.optInt("guessValue"),
+                    result = action.optString("result")
+                )
+            }
         )
     }
 }
