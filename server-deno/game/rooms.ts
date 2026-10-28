@@ -199,7 +199,7 @@ export class RoomManager {
       startedAt: createdAt,
       lastActivityAt: createdAt,
       noOpenConnectionSince: null,
-      sockets: Array(seatCount).fill(null),
+      sockets: [ws, ...Array(seatCount - 1).fill(null)],
       resumeTokens: [crypto.randomUUID(), null, null],
       playerIds,
       names,
@@ -1896,7 +1896,7 @@ export class RoomManager {
   }
 
   private seatCount(room: Room): number {
-    return this.seatCountForGame(room.gameType);
+    return room.playerIds.length;
   }
 
   private seatCountForGame(gameType: GameType): number {

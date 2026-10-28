@@ -50,7 +50,7 @@ Deno.test("情书创建房间按选择保留二至四个座位", () => {
     if (created.gameType !== "LOVE_LETTER" || (created.players as string[]).length !== count) {
       throw new Error(`情书没有按 ${count} 人创建等待区`);
     }
-    if (created.requiredHumans !== count) throw new Error("情书人数配置未返回");
+    if (Number(created.requiredHumans) !== count) throw new Error("情书人数配置未返回");
     manager.disband(socket(host));
   }
 });

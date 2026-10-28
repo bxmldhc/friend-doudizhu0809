@@ -254,7 +254,8 @@ fun HomeScreen(
                         resumeSavedAt = state.resumeSavedAt,
                         onCreateGomoku = onCreateGomoku,
                         onJoinGomoku = { onJoinGomoku(gomokuRoomCode) },
-                        onOpen2048 = onOpen2048
+                        onOpen2048 = onOpen2048,
+                        onOpenLoveLetter = onOpenLoveLetter
                     )
                     Row(
                         modifier = Modifier
@@ -290,7 +291,7 @@ fun HomeScreen(
                             modifier = Modifier.width(if (compact) 112.dp else 138.dp),
                             imageRes = R.drawable.wangyouge_game_more,
                             title = "情书",
-                            onClick = onOpenLoveLetter
+                            onClick = { selectedGame = HomeGame.LOVE_LETTER }
                         )
                         HomeGameTile(
                             modifier = Modifier.width(if (compact) 112.dp else 138.dp),
@@ -354,10 +355,12 @@ private fun HomeGameHero(
     resumeSavedAt: Long?,
     onCreateGomoku: () -> Unit,
     onJoinGomoku: () -> Unit,
-    onOpen2048: () -> Unit
+    onOpen2048: () -> Unit,
+    onOpenLoveLetter: () -> Unit
 ) {
     val isDoudizhu = selectedGame == HomeGame.DOUDIZHU
     val isGomoku = selectedGame == HomeGame.GOMOKU
+    val isLoveLetter = selectedGame == HomeGame.LOVE_LETTER
     val title = when (selectedGame) { HomeGame.DOUDIZHU -> "好友斗地主"; HomeGame.GOMOKU -> "五子棋"; HomeGame.GAME_2048 -> "2048"; HomeGame.LOVE_LETTER -> "情书" }
     val detail = when (selectedGame) { HomeGame.DOUDIZHU -> "三人联机，支持 AI 补位"; HomeGame.GOMOKU -> "双人联机，黑方先行"; HomeGame.GAME_2048 -> "单人游戏，挑战最高分"; HomeGame.LOVE_LETTER -> "经典 16 张牌，支持 AI 补位" }
     val imageRes = when (selectedGame) { HomeGame.DOUDIZHU -> R.drawable.wangyouge_game_doudizhu; HomeGame.GOMOKU -> R.drawable.wangyouge_game_gomoku; HomeGame.GAME_2048, HomeGame.LOVE_LETTER -> R.drawable.wangyouge_game_more }
@@ -453,6 +456,12 @@ private fun HomeGameHero(
                     ) {
                         Text("加入")
                     }
+                }
+            } else if (isLoveLetter) {
+                Button(onClick = onOpenLoveLetter, modifier = Modifier.height(50.dp), colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Coral)) {
+                    Icon(Icons.Default.PlayArrow, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("创建房间", fontWeight = FontWeight.Bold)
                 }
             } else {
                 Button(
